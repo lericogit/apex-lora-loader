@@ -3,12 +3,14 @@ import { api } from "../../scripts/api.js";
 import {
   DEFAULT_SETTINGS,
   STRENGTH_DRAG_PIXELS_PER_TICK,
+  addSection as addSectionToState,
   addTriggerWord,
+  assignSectionColumns,
   allRows,
   applyPreset,
   createRow,
   createSection,
-  masonryLayout,
+  insertionIndexFromMidpoints,
   matchesFolderFilters,
   moveRow,
   moveSection,
@@ -18,16 +20,20 @@ import {
   normalizeTriggerMetadata,
   normalizeTriggerPosition,
   presetEntriesFromState,
+  responsiveColumnCount,
+  sectionColumn,
+  sectionsByVisibleColumn,
   serializeState,
   removeTriggerWord,
   toggleTriggerWord,
   strengthFromDrag,
+  toggleSectionRows,
 } from "./state.js";
 
 const NODE_CLASS = "ApexLoraLoader";
 const DATA_WIDGET = "stack_data";
 const DEFAULT_SIZE = [540, 380];
-const SECTION_TOGGLE_ICON_STYLE = "listChevrons";
+const SECTION_TOGGLE_ICON_STYLE = "chevrons";
 
 const SECTION_TOGGLE_ICON_SETS = {
   chevrons: { collapsed: "chevronRight", expanded: "chevronDown" },
@@ -71,6 +77,16 @@ const ICONS = {
       ["path", { d: "M16 19H3" }],
       ["path", { d: "m15.5 9.5 5 5" }],
       ["path", { d: "m20.5 9.5-5 5" }],
+    ],
+  },
+  listTodo: {
+    className: "lucide-list-todo",
+    nodes: [
+      ["path", { d: "M13 5h8" }],
+      ["path", { d: "M13 12h8" }],
+      ["path", { d: "M13 19h8" }],
+      ["path", { d: "m3 17 2 2 4-4" }],
+      ["rect", { x: "3", y: "4", width: "6", height: "6", rx: "1" }],
     ],
   },
   plus: {
@@ -1039,6 +1055,7 @@ async function showTriggerEditor(node, anchor, rowId) {
         close();
         const savedMetadata = normalizeTriggerMetadata(saved);
         row.trigger_position = draftPosition;
+        applyTriggerMetadata(row, savedMetadata);
         updateOpenTriggerMetadata(saved.sha256, savedMetadata, node);
         commit(node, { presetDirty: false });
         const count = savedMetadata.trigger_words.length;
@@ -1318,7 +1335,27 @@ function buildToolbar(node) {
   settings.addEventListener("click", () => showNodeSettings(node, settings));
   const addSection = iconButton("listPlus", "Add a named LoRA section", "apex-tool apex-icon-label", "Section");
   addSection.addEventListener("click", () => {
-    node.__apexState.sections.push(createSection(`Section ${node.__apexState.sections.length + 1}`));
+    const styles = getComputedStyle(node.__apexRoot);
+    const minimum = parseFloat(styles.getPropertyValue("--apex-section-min-width")) || 320;
+    const gap = parseFloat(styles.getPropertyValue("--apex-section-grid-gap")) || 6;
+    const width = node.__apexStackContent?.clientWidth
+      || Math.max(1, (node.size?.[0] || DEFAULT_SIZE[0]) - 12);
+    const columnCount = responsiveColumnCount(
+      width,
+      node.__apexState.sections.length + 1,
+      minimum,
+      gap,
+    );
+    const lanes = node.__apexStackContent
+      ? directChildren(node.__apexStackContent, "apex-section-column")
+      : [];
+    let column = Math.min(lanes.length, columnCount - 1);
+    if (lanes.length === columnCount && lanes.length) {
+      const heights = lanes.map(sectionLaneContentHeight);
+      column = heights.indexOf(Math.min(...heights));
+    }
+    const section = createSection(`Section ${node.__apexState.sections.length + 1}`, column);
+    addSectionToState(node.__apexState, section, column);
     commit(node, { presetDirty: false });
   });
   toolbar.append(
@@ -1396,7 +1433,77 @@ function installStrengthDrag(node, row, input) {
 }
 
 
-function buildRow(node, section, row, rowIndex) {
+function clearDragFeedback() {
+  document.querySelectorAll(".apex-drop-marker").forEach((element) => element.remove());
+  document.querySelectorAll(".apex-row-drag-over, .apex-section-drag-over").forEach((element) => {
+    element.classList.remove("apex-row-drag-over", "apex-section-drag-over");
+  });
+}
+
+
+function directChildren(container, className) {
+  return [...container.children].filter((element) => element.classList.contains(className));
+}
+
+
+function sectionLaneContentHeight(lane) {
+  const sections = directChildren(lane, "apex-section");
+  if (!sections.length) return 0;
+  return sections[sections.length - 1].getBoundingClientRect().bottom
+    - lane.getBoundingClientRect().top;
+}
+
+
+function showDropMarker(container, className, elements, index, marker = null) {
+  if (!marker) {
+    marker = document.createElement("div");
+    marker.className = `${className} apex-drop-marker`;
+  }
+  container.insertBefore(marker, elements[index] || null);
+}
+
+
+function rowDropIndex(rows, clientY) {
+  const marker = directChildren(rows, "apex-row-drop-marker")[0] || null;
+  marker?.remove();
+  const elements = directChildren(rows, "apex-row");
+  const midpoints = elements.map((element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.top + rect.height / 2;
+  });
+  return { elements, index: insertionIndexFromMidpoints(clientY, midpoints), marker };
+}
+
+
+function installRowDropTarget(node, section, rows) {
+  rows.addEventListener("dragover", (event) => {
+    if (dragPayload?.type !== "row" || dragPayload.node !== node) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    rows.classList.add("apex-row-drag-over");
+    const target = rowDropIndex(rows, event.clientY);
+    showDropMarker(rows, "apex-row-drop-marker", target.elements, target.index, target.marker);
+  });
+  rows.addEventListener("dragleave", (event) => {
+    if (event.relatedTarget && rows.contains(event.relatedTarget)) return;
+    rows.classList.remove("apex-row-drag-over");
+    directChildren(rows, "apex-row-drop-marker").forEach((element) => element.remove());
+  });
+  rows.addEventListener("drop", (event) => {
+    if (dragPayload?.type !== "row" || dragPayload.node !== node) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const target = rowDropIndex(rows, event.clientY);
+    moveRow(node.__apexState, dragPayload.rowId, section.id, target.index);
+    dragPayload = null;
+    clearDragFeedback();
+    commit(node, { presetDirty: false });
+  });
+}
+
+
+function buildRow(node, section, row) {
   const element = document.createElement("div");
   const showTriggerButton = node.__apexState.settings.show_trigger_button;
   element.className = `apex-row${showTriggerButton ? " with-trigger" : ""}${row.enabled ? "" : " disabled"}${row.error ? " error" : ""}`;
@@ -1407,11 +1514,15 @@ function buildRow(node, section, row, rowIndex) {
   handle.title = "Drag to reorder or move to another section";
   handle.draggable = true;
   handle.addEventListener("dragstart", (event) => {
-    dragPayload = { type: "row", rowId: row.id };
+    clearDragFeedback();
+    dragPayload = { type: "row", node, rowId: row.id };
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", row.id);
   });
-  handle.addEventListener("dragend", () => { dragPayload = null; });
+  handle.addEventListener("dragend", () => {
+    dragPayload = null;
+    clearDragFeedback();
+  });
 
   const enabled = document.createElement("input");
   enabled.type = "checkbox";
@@ -1472,22 +1583,6 @@ function buildRow(node, section, row, rowIndex) {
     commit(node, { presetDirty: true });
   });
 
-  element.addEventListener("dragover", (event) => {
-    if (dragPayload?.type !== "row") return;
-    event.preventDefault();
-    element.classList.add("drag-over");
-  });
-  element.addEventListener("dragleave", () => element.classList.remove("drag-over"));
-  element.addEventListener("drop", (event) => {
-    if (dragPayload?.type !== "row") return;
-    event.preventDefault();
-    event.stopPropagation();
-    const rect = element.getBoundingClientRect();
-    const targetIndex = rowIndex + (event.clientY > rect.top + rect.height / 2 ? 1 : 0);
-    moveRow(node.__apexState, dragPayload.rowId, section.id, targetIndex);
-    dragPayload = null;
-    commit(node, { presetDirty: false });
-  });
   element.append(handle, enabled, name, strength);
   if (trigger) element.appendChild(trigger);
   element.appendChild(remove);
@@ -1495,22 +1590,27 @@ function buildRow(node, section, row, rowIndex) {
 }
 
 
-function buildSection(node, section, sectionIndex) {
+function buildSection(node, section) {
   const element = document.createElement("div");
   element.className = "apex-section";
+  element.dataset.sectionId = section.id;
   const header = document.createElement("div");
   header.className = "apex-section-header";
   const handle = document.createElement("span");
   handle.className = "apex-drag";
   handle.textContent = "⠿";
-  handle.title = "Drag to reorder this section";
+  handle.title = "Drag to move this section within or between columns";
   handle.draggable = true;
   handle.addEventListener("dragstart", (event) => {
-    dragPayload = { type: "section", sectionId: section.id };
+    clearDragFeedback();
+    dragPayload = { type: "section", node, sectionId: section.id };
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", section.id);
   });
-  handle.addEventListener("dragend", () => { dragPayload = null; });
+  handle.addEventListener("dragend", () => {
+    dragPayload = null;
+    clearDragFeedback();
+  });
 
   const toggleIcons = SECTION_TOGGLE_ICON_SETS[SECTION_TOGGLE_ICON_STYLE];
   const collapse = iconButton(
@@ -1521,13 +1621,24 @@ function buildSection(node, section, sectionIndex) {
     section.collapsed = !section.collapsed;
     commit(node, { presetDirty: false });
   });
+  const allEnabled = section.loras.length > 0 && section.loras.every((row) => row.enabled);
+  const toggleAll = iconButton(
+    "listTodo",
+    allEnabled ? "Disable all LoRAs in this section" : "Enable all LoRAs in this section",
+  );
+  toggleAll.disabled = section.loras.length === 0;
+  toggleAll.addEventListener("click", () => {
+    toggleSectionRows(section);
+    commit(node, { presetDirty: true });
+  });
   const name = document.createElement("input");
   name.className = "apex-section-name";
   name.value = section.name;
   name.maxLength = 100;
   name.title = "Section name";
   name.addEventListener("change", () => {
-    section.name = name.value.trim() || `Section ${sectionIndex + 1}`;
+    const currentIndex = node.__apexState.sections.indexOf(section);
+    section.name = name.value.trim() || `Section ${currentIndex + 1}`;
     commit(node, { presetDirty: false });
   });
   const count = document.createElement("span");
@@ -1540,46 +1651,122 @@ function buildSection(node, section, sectionIndex) {
   remove.addEventListener("click", () => {
     if (section.loras.length && !window.confirm(`Delete “${section.name}” and its ${section.loras.length} LoRA row(s)?`)) return;
     node.__apexState.sections.splice(node.__apexState.sections.indexOf(section), 1);
-    if (!node.__apexState.sections.length) node.__apexState.sections.push(createSection());
+    if (!node.__apexState.sections.length) node.__apexState.sections.push(createSection("LoRAs", 0));
     commit(node, { presetDirty: true });
   });
-  header.append(handle, collapse, name, count, add, remove);
+  header.append(handle, collapse, toggleAll, name, count, add, remove);
   element.appendChild(header);
 
   element.addEventListener("dragover", (event) => {
-    if (dragPayload?.type !== "section") return;
+    if (dragPayload?.type !== "row" || dragPayload.node !== node || event.target.closest(".apex-rows")) return;
     event.preventDefault();
-    element.classList.add("drag-over");
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    element.classList.add("apex-row-drag-over");
   });
-  element.addEventListener("dragleave", () => element.classList.remove("drag-over"));
+  element.addEventListener("dragleave", (event) => {
+    if (event.relatedTarget && element.contains(event.relatedTarget)) return;
+    element.classList.remove("apex-row-drag-over");
+  });
   element.addEventListener("drop", (event) => {
-    if (dragPayload?.type !== "section") return;
+    if (dragPayload?.type !== "row" || dragPayload.node !== node || event.target.closest(".apex-rows")) return;
     event.preventDefault();
-    const rect = element.getBoundingClientRect();
-    const after = event.clientY > rect.top + rect.height / 2;
-    const targetIndex = sectionIndex + (after ? 1 : 0);
-    moveSection(node.__apexState, dragPayload.sectionId, targetIndex);
+    event.stopPropagation();
+    moveRow(node.__apexState, dragPayload.rowId, section.id, section.loras.length);
+    if (section.collapsed) section.collapsed = false;
     dragPayload = null;
+    clearDragFeedback();
     commit(node, { presetDirty: false });
   });
 
   if (!section.collapsed) {
     const rows = document.createElement("div");
     rows.className = `apex-rows${section.loras.length ? "" : " empty"}`;
-    section.loras.forEach((row, rowIndex) => rows.appendChild(buildRow(node, section, row, rowIndex)));
-    rows.addEventListener("dragover", (event) => {
-      if (dragPayload?.type === "row") event.preventDefault();
-    });
-    rows.addEventListener("drop", (event) => {
-      if (dragPayload?.type !== "row" || event.target.closest(".apex-row")) return;
-      event.preventDefault();
-      moveRow(node.__apexState, dragPayload.rowId, section.id, section.loras.length);
-      dragPayload = null;
-      commit(node, { presetDirty: false });
-    });
+    section.loras.forEach((row) => rows.appendChild(buildRow(node, section, row)));
+    installRowDropTarget(node, section, rows);
     element.appendChild(rows);
   }
   return element;
+}
+
+
+function sectionDropTarget(node, lane, clientY) {
+  const marker = directChildren(lane, "apex-section-drop-marker")[0] || null;
+  marker?.remove();
+  const elements = directChildren(lane, "apex-section");
+  const midpoints = elements.map((element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.top + rect.height / 2;
+  });
+  const markerIndex = insertionIndexFromMidpoints(clientY, midpoints);
+  if (!elements.length) {
+    return {
+      elements,
+      markerIndex,
+      marker,
+      column: Number(lane.dataset.column) || 0,
+      targetIndex: 0,
+    };
+  }
+
+  const afterLast = markerIndex === elements.length;
+  const reference = elements[afterLast ? elements.length - 1 : markerIndex];
+  const target = node.__apexState.sections.find((section) => section.id === reference.dataset.sectionId);
+  if (!target) {
+    return {
+      elements,
+      markerIndex,
+      marker,
+      column: Number(lane.dataset.column) || 0,
+      targetIndex: 0,
+    };
+  }
+  const column = sectionColumn(target);
+  const targetIndex = node.__apexState.sections
+    .filter((section) => sectionColumn(section) === column)
+    .findIndex((section) => section.id === target.id) + (afterLast ? 1 : 0);
+  return { elements, markerIndex, marker, column, targetIndex };
+}
+
+
+function createSectionLane(node, column) {
+  const lane = document.createElement("div");
+  lane.className = "apex-section-column";
+  lane.dataset.column = String(column);
+  lane.addEventListener("dragover", (event) => {
+    if (dragPayload?.type !== "section" || dragPayload.node !== node) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    lane.classList.add("apex-section-drag-over");
+    const target = sectionDropTarget(node, lane, event.clientY);
+    showDropMarker(
+      lane,
+      "apex-section-drop-marker",
+      target.elements,
+      target.markerIndex,
+      target.marker,
+    );
+  });
+  lane.addEventListener("dragleave", (event) => {
+    if (event.relatedTarget && lane.contains(event.relatedTarget)) return;
+    lane.classList.remove("apex-section-drag-over");
+    directChildren(lane, "apex-section-drop-marker").forEach((element) => element.remove());
+  });
+  lane.addEventListener("drop", (event) => {
+    if (dragPayload?.type !== "section" || dragPayload.node !== node) return;
+    event.preventDefault();
+    const target = sectionDropTarget(node, lane, event.clientY);
+    moveSection(
+      node.__apexState,
+      dragPayload.sectionId,
+      target.column,
+      target.targetIndex,
+    );
+    dragPayload = null;
+    clearDragFeedback();
+    commit(node, { presetDirty: false });
+  });
+  return lane;
 }
 
 
@@ -1587,33 +1774,40 @@ function layoutSections(node) {
   const stack = node.__apexStack;
   const content = node.__apexStackContent;
   if (!stack?.isConnected || !content?.isConnected) return;
-  const sections = [...content.children];
-  if (!sections.length) {
-    content.style.height = "0px";
-    return;
-  }
+  const sectionElements = [...content.querySelectorAll(".apex-section")];
+  if (!sectionElements.length) return;
 
   const styles = getComputedStyle(node.__apexRoot);
   const minimum = parseFloat(styles.getPropertyValue("--apex-section-min-width")) || 320;
   const maximum = parseFloat(styles.getPropertyValue("--apex-section-max-width")) || 646;
   const gap = parseFloat(styles.getPropertyValue("--apex-section-grid-gap")) || 6;
   const width = content.clientWidth || Math.max(1, (node.size?.[0] || DEFAULT_SIZE[0]) - 12);
-  const fittingColumns = Math.max(1, Math.floor((width + gap) / (minimum + gap)));
-  const columnCount = Math.min(sections.length, fittingColumns);
+  const columnCount = responsiveColumnCount(width, node.__apexState.sections.length, minimum, gap);
   const columnWidth = Math.min(maximum, (width - gap * (columnCount - 1)) / columnCount);
+  const assigned = assignSectionColumns(node.__apexState, columnCount);
+  if (assigned) commit(node, { presetDirty: false, render: false });
 
-  for (const section of sections) section.style.width = `${columnWidth}px`;
-  const layout = masonryLayout(
-    sections.map((section) => section.offsetHeight),
-    columnCount,
-    gap,
-  );
-  layout.items.forEach((item, index) => {
-    const x = item.column * (columnWidth + gap);
-    sections[index].style.transform = `translate3d(${x}px, ${item.y}px, 0)`;
-  });
-  content.style.height = `${Math.ceil(layout.height)}px`;
+  const needsColumns = content.dataset.columns !== String(columnCount)
+    || directChildren(content, "apex-section-column").length !== columnCount;
+  if (needsColumns) {
+    const elements = new Map(sectionElements.map((element) => [element.dataset.sectionId, element]));
+    const lanes = Array.from({ length: columnCount }, (_, column) => createSectionLane(node, column));
+    sectionsByVisibleColumn(node.__apexState, columnCount).forEach((sections, column) => {
+      for (const section of sections) {
+        const element = elements.get(section.id);
+        if (element) lanes[column].appendChild(element);
+      }
+    });
+    content.replaceChildren(...lanes);
+  }
+
+  content.style.gridTemplateColumns = `repeat(${columnCount}, minmax(0, ${columnWidth}px))`;
   content.dataset.columns = String(columnCount);
+  node.__apexColumnCount = columnCount;
+  if (Number.isFinite(node.__apexPendingScrollTop)) {
+    stack.scrollTop = node.__apexPendingScrollTop;
+    node.__apexPendingScrollTop = null;
+  }
 }
 
 
@@ -1629,6 +1823,7 @@ function scheduleSectionLayout(node) {
 function renderNode(node) {
   const root = node.__apexRoot;
   if (!root || !node.__apexState) return;
+  node.__apexPendingScrollTop = node.__apexStack?.scrollTop || 0;
   root.replaceChildren();
   root.appendChild(buildToolbar(node));
   const status = document.createElement("div");
@@ -1641,8 +1836,8 @@ function renderNode(node) {
   stack.className = "apex-stack";
   const content = document.createElement("div");
   content.className = "apex-stack-content";
-  node.__apexState.sections.forEach((section, index) => {
-    content.appendChild(buildSection(node, section, index));
+  node.__apexState.sections.forEach((section) => {
+    content.appendChild(buildSection(node, section));
   });
   stack.appendChild(content);
   root.appendChild(stack);
@@ -1742,6 +1937,8 @@ app.registerExtension({
     const originalRemoved = nodeType.prototype.onRemoved;
     nodeType.prototype.onRemoved = function () {
       closeOpenPopover();
+      if (dragPayload?.node === this) dragPayload = null;
+      clearDragFeedback();
       if (this.__apexLayoutFrame != null) cancelAnimationFrame(this.__apexLayoutFrame);
       this.__apexLayoutFrame = null;
       this.__apexBuilt = false;

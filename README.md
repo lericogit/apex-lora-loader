@@ -7,7 +7,7 @@
 Organize, filter, reorder, preset, recover, and annotate large LoRA stacks in one compact node.
 
 [![License: MIT][license-shield]][license-link]
-[![Version: v0.1][version-shield]][version-link]
+[![Version: v0.1.1][version-shield]][version-link]
 [![ComfyUI Custom Node][comfyui-shield]][comfyui-link]
 [![Local only][local-shield]][local-link]
 [![No extra packages][dependencies-shield]][dependencies-link]
@@ -42,7 +42,7 @@ The node intentionally has no CLIP socket. LoRAs are applied to `MODEL` with zer
 
 - Compact LoRA rows with enable toggles, searchable selection, strength control, trigger metadata, and removal.
 - Named, collapsible, draggable sections with cross-section row reordering.
-- Responsive shortest-column masonry layout that uses available node width without forcing unrelated sections into equal-height grid rows.
+- Responsive manual section columns with stable placement and independent vertical stacking.
 - Recursive per-node folder filters with All, None, Root, and multi-folder selection.
 - Confirmed **Add all LoRAs** action for the current filtered library.
 - Installation-wide presets that restore enabled states and strengths without replacing the current stack.
@@ -55,9 +55,11 @@ The node intentionally has no CLIP socket. LoRAs are applied to `MODEL` with zer
 
 Each LoRA occupies one compact row containing a drag handle, enable toggle, searchable chooser, strength input, optional trigger-word control, and remove action.
 
-Sections have stable identities, editable names, enabled counts, collapse controls, and guarded deletion. Both sections and rows can be reordered, and rows can move between sections. Visual order is also execution order.
+Sections have stable identities, editable names, enabled counts, collapse controls, one-click all/none toggles, and guarded deletion. Drag sections vertically within a column or horizontally between columns. LoRA rows can be reordered or moved between sections, with a visible insertion marker across the full drop area. Visual order is also execution order: columns run left to right, and each column runs top to bottom.
 
-When the node becomes wider, Apex creates additional section columns. Uneven sections are packed into the currently shortest column so each column continues naturally beneath its own content. The section width limits and gap are exposed as CSS variables near the top of `web/apex_lora_loader.css` for easy tuning.
+When the node becomes wider, Apex creates additional section columns. Each column is an independent vertical stack, so differently sized sections sit directly beneath their own neighbors without forcing matching grid rows. Section placement remains under your control instead of being automatically rebalanced. When the node narrows, unavailable preferred columns merge into the final visible column in deterministic order and return when space is available again.
+
+The section width limits and gap are exposed as CSS variables near the top of `web/apex_lora_loader.css` for easy tuning. Lane membership changes only at responsive column breakpoints; section heights and overall stack height are handled by the browser.
 
 The toolbar remains fixed while the stack uses the remaining node height and scrolls when necessary.
 
@@ -168,7 +170,7 @@ No `pip install` or `npm install` step is required.
 6. Optionally connect a prompt and enable trigger-word controls in Settings.
 7. Save useful combinations as global presets.
 
-Enabled, nonzero-strength rows are applied from top to bottom across sections. Disabled and zero-strength rows are skipped.
+Enabled, nonzero-strength rows are applied down each section and column, proceeding through columns from left to right. Disabled and zero-strength rows are skipped.
 
 ---
 
@@ -206,8 +208,8 @@ Apex's original implementation was created for this project. No source from the 
 | Project | Relationship | What Apex builds around or adds |
 | --- | --- | --- |
 | [ComfyUI](https://github.com/Comfy-Org/ComfyUI) | Runtime foundation and canonical LoRA loading/application APIs. | Ordered multi-row orchestration, responsive sections, filtering, presets, identity recovery, and prompt metadata. |
-| [rgthree-comfy Power LoRA Loader](https://github.com/rgthree/rgthree-comfy) | UX reference for compact rows, per-row controls, reordering, and horizontal strength dragging. | Named masonry sections, recursive folder filters, global presets, rename recovery, trigger arrays, and prompt routing. |
-| [Fantastic LoRAs](https://github.com/Adudeguyman/comfyui_fantastic-loras) | Design reference for serialized custom rows, searchable selection, and per-node filtering. | Shortest-column sections, hash-based identity, smart presets, confirmed bulk addition, and local trigger metadata. |
+| [rgthree-comfy Power LoRA Loader](https://github.com/rgthree/rgthree-comfy) | UX reference for compact rows, per-row controls, reordering, and horizontal strength dragging. | Named manual section columns, recursive folder filters, global presets, rename recovery, trigger arrays, and prompt routing. |
+| [Fantastic LoRAs](https://github.com/Adudeguyman/comfyui_fantastic-loras) | Design reference for serialized custom rows, searchable selection, and per-node filtering. | Manual responsive columns, hash-based identity, smart presets, confirmed bulk addition, and local trigger metadata. |
 | [ComfyUI-Lora-Auto-Trigger-Words](https://github.com/idrirap/ComfyUI-Lora-Auto-Trigger-Words) | Concept reference for associating LoRAs, hashes, and trigger words. | Fully local manual metadata, multiple active choices, editable chips, and per-row placement without remote lookup. |
 | [ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes) | Technical reference while reviewing LoRA application patterns. | Apex remains model-agnostic and delegates the actual patch operation to ComfyUI core. |
 | [ComfyUI-INT8-Fast](https://github.com/BobJohnson24/ComfyUI-INT8-Fast) | Compatibility reference for LoRAs used with INT8 ConvRot models. | No INT8-Fast code or quantization math is included; Apex respects the incoming model patcher. |
@@ -222,7 +224,7 @@ Embedded Lucide icons retain their ISC terms, and Feather-derived Lucide icons r
 
 [license-shield]: https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square
 [license-link]: LICENSE
-[version-shield]: https://img.shields.io/badge/version-v0.1-1f6feb?style=flat-square
+[version-shield]: https://img.shields.io/badge/version-v0.1.1-1f6feb?style=flat-square
 [version-link]: https://github.com/lericogit/apex-lora-loader/releases
 [comfyui-shield]: https://img.shields.io/badge/ComfyUI-custom_node-6f42c1?style=flat-square
 [comfyui-link]: https://github.com/Comfy-Org/ComfyUI

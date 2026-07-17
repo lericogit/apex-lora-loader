@@ -115,8 +115,14 @@ export function makeId() {
   return crypto.randomUUID();
 }
 
-export function createSection(name = "LoRAs") {
-  return { id: makeId(), name, collapsed: false, loras: [] };
+export function createSection(name = "LoRAs", column = 0) {
+  return {
+    id: makeId(),
+    name,
+    collapsed: false,
+    column: Number.isInteger(column) && column >= 0 ? column : 0,
+    loras: [],
+  };
 }
 
 export function createState() {
@@ -170,6 +176,7 @@ export function normalizeState(value) {
         ? section.name.trim()
         : `Section ${sectionIndex + 1}`,
       collapsed: section?.collapsed === true,
+      column: Number.isInteger(section?.column) && section.column >= 0 ? section.column : null,
       loras: Array.isArray(section?.loras)
         ? section.loras.filter((row) => row && typeof row.name === "string").map((row) => ({
             id: typeof row.id === "string" ? row.id : makeId(),
@@ -199,6 +206,7 @@ export function serializeState(state) {
       id: section.id,
       name: section.name,
       collapsed: section.collapsed,
+      column: Number.isInteger(section.column) && section.column >= 0 ? section.column : null,
       loras: section.loras.map(({ error, ...row }) => row),
     })),
   });
@@ -206,6 +214,12 @@ export function serializeState(state) {
 
 export function allRows(state) {
   return state.sections.flatMap((section) => section.loras);
+}
+
+export function toggleSectionRows(section) {
+  const enable = section.loras.some((row) => !row.enabled);
+  for (const row of section.loras) row.enabled = enable;
+  return enable;
 }
 
 export function folderOf(name) {
@@ -235,31 +249,102 @@ export function strengthFromDrag(startValue, deltaX, step = DEFAULT_SETTINGS.str
   return valueUnits / 100;
 }
 
-export function masonryLayout(heights, columnCount, gap = 0) {
-  const count = Math.max(1, Math.floor(columnCount));
-  const columnHeights = Array(count).fill(0);
-  const items = heights.map((height) => {
-    const shortest = Math.min(...columnHeights);
-    const column = columnHeights.indexOf(shortest);
-    const y = columnHeights[column];
-    columnHeights[column] += Math.max(0, Number(height) || 0) + gap;
-    return { column, y };
-  });
-  return {
-    items,
-    height: heights.length ? Math.max(...columnHeights) - gap : 0,
-  };
+export function responsiveColumnCount(width, sectionCount, minimum = 320, gap = 6) {
+  const available = Math.max(1, Number(width) || 1);
+  const sections = Math.max(1, Math.floor(Number(sectionCount) || 1));
+  const minWidth = Math.max(1, Number(minimum) || 320);
+  const spacing = Math.max(0, Number(gap) || 0);
+  return Math.min(sections, Math.max(1, Math.floor((available + spacing) / (minWidth + spacing))));
 }
 
-export function moveSection(state, sectionId, targetIndex) {
+export function sectionColumn(section) {
+  return Number.isInteger(section?.column) && section.column >= 0 ? section.column : 0;
+}
+
+export function assignSectionColumns(state, columnCount) {
+  const columns = Math.max(1, Math.floor(Number(columnCount) || 1));
+  const missing = state.sections.filter((section) => !Number.isInteger(section.column) || section.column < 0);
+  if (!missing.length) return false;
+  if (columns === 1) return false;
+
+  if (missing.length === state.sections.length) {
+    const base = Math.floor(state.sections.length / columns);
+    let remainder = state.sections.length % columns;
+    let sectionIndex = 0;
+    for (let column = 0; column < columns; column += 1) {
+      const size = base + (remainder > 0 ? 1 : 0);
+      remainder -= remainder > 0 ? 1 : 0;
+      for (let index = 0; index < size; index += 1) {
+        state.sections[sectionIndex].column = column;
+        sectionIndex += 1;
+      }
+    }
+    return true;
+  }
+
+  const counts = Array(columns).fill(0);
+  for (const section of state.sections) {
+    if (Number.isInteger(section.column) && section.column >= 0) {
+      counts[Math.min(section.column, columns - 1)] += 1;
+    }
+  }
+  for (const section of missing) {
+    const smallest = Math.min(...counts);
+    const column = counts.indexOf(smallest);
+    section.column = column;
+    counts[column] += 1;
+  }
+  state.sections.sort((left, right) => sectionColumn(left) - sectionColumn(right));
+  return true;
+}
+
+export function sectionsByVisibleColumn(state, columnCount) {
+  const columns = Math.max(1, Math.floor(Number(columnCount) || 1));
+  const lanes = Array.from({ length: columns }, () => []);
+  for (const section of state.sections) {
+    lanes[Math.min(sectionColumn(section), columns - 1)].push(section);
+  }
+  return lanes;
+}
+
+export function addSection(state, section, column = 0) {
+  const targetColumn = Math.max(0, Math.floor(Number(column) || 0));
+  section.column = targetColumn;
+  const nextColumn = state.sections.findIndex((item) => sectionColumn(item) > targetColumn);
+  state.sections.splice(nextColumn === -1 ? state.sections.length : nextColumn, 0, section);
+}
+
+export function moveSection(state, sectionId, targetColumn, targetIndex) {
   const sourceIndex = state.sections.findIndex((section) => section.id === sectionId);
   if (sourceIndex === -1) return false;
+  const column = Math.max(0, Math.floor(Number(targetColumn) || 0));
+  const sourceColumn = sectionColumn(state.sections[sourceIndex]);
+  const sourceColumnIndex = state.sections
+    .filter((section) => sectionColumn(section) === sourceColumn)
+    .findIndex((section) => section.id === sectionId);
   const [section] = state.sections.splice(sourceIndex, 1);
-  let index = targetIndex;
-  if (sourceIndex < index) index -= 1;
-  index = Math.max(0, Math.min(index, state.sections.length));
-  state.sections.splice(index, 0, section);
+  const targetSections = state.sections.filter((item) => sectionColumn(item) === column);
+  let index = Math.floor(Number(targetIndex) || 0);
+  if (sourceColumn === column && sourceColumnIndex < index) index -= 1;
+  index = Math.max(0, Math.min(index, targetSections.length));
+  section.column = column;
+
+  let insertionIndex;
+  if (index < targetSections.length) {
+    insertionIndex = state.sections.indexOf(targetSections[index]);
+  } else {
+    insertionIndex = state.sections.findIndex((item) => sectionColumn(item) > column);
+    if (insertionIndex === -1) insertionIndex = state.sections.length;
+  }
+  state.sections.splice(insertionIndex, 0, section);
   return true;
+}
+
+export function insertionIndexFromMidpoints(position, midpoints) {
+  const value = Number(position);
+  if (!Number.isFinite(value)) return midpoints.length;
+  const index = midpoints.findIndex((midpoint) => value < midpoint);
+  return index === -1 ? midpoints.length : index;
 }
 
 export function moveRow(state, rowId, targetSectionId, targetIndex) {

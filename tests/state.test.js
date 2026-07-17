@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  addSection,
   addTriggerWord,
+  assignSectionColumns,
   applyPreset,
-  masonryLayout,
+  createSection,
+  insertionIndexFromMidpoints,
   matchesFolderFilters,
   moveRow,
   moveSection,
@@ -13,8 +16,11 @@ import {
   normalizeTriggerMetadata,
   normalizeTriggerPosition,
   removeTriggerWord,
+  responsiveColumnCount,
+  sectionsByVisibleColumn,
   serializeState,
   strengthFromDrag,
+  toggleSectionRows,
   toggleTriggerWord,
 } from "../web/state.js";
 
@@ -64,16 +70,93 @@ test("horizontal strength dragging is precise and clamped", () => {
 });
 
 
-test("masonry layout stacks each section under the shortest column", () => {
-  assert.deepEqual(masonryLayout([100, 300, 80, 50], 2, 6), {
-    items: [
-      { column: 0, y: 0 },
-      { column: 1, y: 0 },
-      { column: 0, y: 106 },
-      { column: 0, y: 192 },
+test("section toggle enables mixed rows and disables fully enabled rows", () => {
+  const section = sampleState().sections[0];
+  section.loras[1].enabled = false;
+
+  assert.equal(toggleSectionRows(section), true);
+  assert.equal(section.loras.every((item) => item.enabled), true);
+  assert.equal(toggleSectionRows(section), false);
+  assert.equal(section.loras.every((item) => !item.enabled), true);
+});
+
+
+test("responsive section columns change only at minimum-width breakpoints", () => {
+  assert.equal(responsiveColumnCount(200, 6, 320, 6), 1);
+  assert.equal(responsiveColumnCount(645, 6, 320, 6), 1);
+  assert.equal(responsiveColumnCount(646, 6, 320, 6), 2);
+  assert.equal(responsiveColumnCount(971, 6, 320, 6), 2);
+  assert.equal(responsiveColumnCount(972, 6, 320, 6), 3);
+  assert.equal(responsiveColumnCount(2000, 2, 320, 6), 2);
+});
+
+
+test("legacy sections receive stable contiguous columns and serialize them", () => {
+  const state = normalizeState({
+    ...sampleState(),
+    sections: [
+      ...sampleState().sections,
+      { id: "s3", name: "Three", collapsed: false, loras: [] },
+      { id: "s4", name: "Four", collapsed: false, loras: [] },
+      { id: "s5", name: "Five", collapsed: false, loras: [] },
     ],
-    height: 300,
   });
+  assert.equal(assignSectionColumns(state, 1), false);
+  assert.deepEqual(state.sections.map((section) => section.column), [null, null, null, null, null]);
+  assert.deepEqual(
+    JSON.parse(serializeState(state)).sections.map((section) => section.column),
+    [null, null, null, null, null],
+  );
+  assert.equal(assignSectionColumns(state, 2), true);
+  assert.deepEqual(state.sections.map((section) => section.column), [0, 0, 0, 1, 1]);
+  assert.equal(assignSectionColumns(state, 2), false);
+  assert.deepEqual(
+    JSON.parse(serializeState(state)).sections.map((section) => section.column),
+    [0, 0, 0, 1, 1],
+  );
+});
+
+
+test("partial column migration restores canonical visual execution order", () => {
+  const state = sampleState();
+  state.sections[0].column = 1;
+  state.sections[1].column = null;
+  assert.equal(assignSectionColumns(state, 2), true);
+  assert.deepEqual(state.sections.map((section) => [section.id, section.column]), [
+    ["s2", 0],
+    ["s1", 1],
+  ]);
+  assert.deepEqual(
+    sectionsByVisibleColumn(state, 2).flat().map((section) => section.id),
+    state.sections.map((section) => section.id),
+  );
+});
+
+
+test("preferred columns merge responsively and restore without mutating state", () => {
+  const state = sampleState();
+  state.sections.push({ id: "s3", name: "Three", column: 2, collapsed: false, loras: [] });
+  state.sections[0].column = 0;
+  state.sections[1].column = 1;
+  assert.deepEqual(
+    sectionsByVisibleColumn(state, 3).map((lane) => lane.map((section) => section.id)),
+    [["s1"], ["s2"], ["s3"]],
+  );
+  assert.deepEqual(
+    sectionsByVisibleColumn(state, 2).map((lane) => lane.map((section) => section.id)),
+    [["s1"], ["s2", "s3"]],
+  );
+  assert.deepEqual(state.sections.map((section) => section.column), [0, 1, 2]);
+});
+
+
+test("drop insertion uses every point before, between, and after rows", () => {
+  assert.equal(insertionIndexFromMidpoints(5, []), 0);
+  assert.equal(insertionIndexFromMidpoints(5, [10, 30, 50]), 0);
+  assert.equal(insertionIndexFromMidpoints(10, [10, 30, 50]), 1);
+  assert.equal(insertionIndexFromMidpoints(29, [10, 30, 50]), 1);
+  assert.equal(insertionIndexFromMidpoints(40, [10, 30, 50]), 2);
+  assert.equal(insertionIndexFromMidpoints(60, [10, 30, 50]), 3);
 });
 
 
@@ -187,7 +270,7 @@ test("trigger prompt position is row-local and defaults to append", () => {
 
 test("sections and rows move without changing their contents", () => {
   const state = sampleState();
-  assert.equal(moveSection(state, "s2", 0), true);
+  assert.equal(moveSection(state, "s2", 0, 0), true);
   assert.deepEqual(state.sections.map((section) => section.id), ["s2", "s1"]);
   assert.equal(moveRow(state, "a", "s2", 1), true);
   assert.deepEqual(state.sections[0].loras.map((item) => item.id), ["c", "a"]);
@@ -197,10 +280,48 @@ test("sections and rows move without changing their contents", () => {
 
 test("sections and rows can move downward to the end", () => {
   const state = sampleState();
-  assert.equal(moveSection(state, "s1", 2), true);
+  assert.equal(moveSection(state, "s1", 0, 2), true);
   assert.deepEqual(state.sections.map((section) => section.id), ["s2", "s1"]);
   assert.equal(moveRow(state, "a", "s1", 2), true);
   assert.deepEqual(state.sections[1].loras.map((item) => item.id), ["b", "a"]);
+});
+
+
+test("rows move into empty sections and invalid destinations restore the source", () => {
+  const state = sampleState();
+  state.sections.push({ id: "empty", name: "Empty", column: 0, collapsed: false, loras: [] });
+  assert.equal(moveRow(state, "a", "empty", 0), true);
+  assert.deepEqual(state.sections[0].loras.map((item) => item.id), ["b"]);
+  assert.deepEqual(state.sections[2].loras.map((item) => item.id), ["a"]);
+  assert.equal(moveRow(state, "a", "missing", 0), false);
+  assert.deepEqual(state.sections[2].loras.map((item) => item.id), ["a"]);
+});
+
+
+test("sections move within and between manual columns in visual execution order", () => {
+  const state = sampleState();
+  state.sections[0].column = 0;
+  state.sections[1].column = 1;
+  const third = createSection("Three", 1);
+  third.id = "s3";
+  addSection(state, third, 1);
+  assert.deepEqual(state.sections.map((section) => [section.id, section.column]), [
+    ["s1", 0],
+    ["s2", 1],
+    ["s3", 1],
+  ]);
+  assert.equal(moveSection(state, "s1", 1, 1), true);
+  assert.deepEqual(state.sections.map((section) => [section.id, section.column]), [
+    ["s2", 1],
+    ["s1", 1],
+    ["s3", 1],
+  ]);
+  assert.equal(moveSection(state, "s3", 0, 0), true);
+  assert.deepEqual(state.sections.map((section) => [section.id, section.column]), [
+    ["s3", 0],
+    ["s2", 1],
+    ["s1", 1],
+  ]);
 });
 
 
