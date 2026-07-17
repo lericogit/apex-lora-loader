@@ -33,6 +33,8 @@ import {
 const NODE_CLASS = "ApexLoraLoader";
 const DATA_WIDGET = "stack_data";
 const DEFAULT_SIZE = [540, 380];
+const NODE_TITLE_COLOR = "#181c23";
+const NODE_BODY_COLOR = "#0f141a";
 const SECTION_TOGGLE_ICON_STYLE = "chevrons";
 
 const SECTION_TOGGLE_ICON_SETS = {
@@ -151,6 +153,14 @@ const ICONS = {
     nodes: [
       ["path", { d: "M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" }],
       ["circle", { cx: "7.5", cy: "7.5", r: ".5", fill: "currentColor" }],
+    ],
+  },
+  triangleAlert: {
+    className: "lucide-triangle-alert",
+    nodes: [
+      ["path", { d: "m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" }],
+      ["path", { d: "M12 9v4" }],
+      ["path", { d: "M12 17h.01" }],
     ],
   },
   chevronRight: {
@@ -299,6 +309,7 @@ function iconButton(icon, title, className = "", label = "") {
   const button = document.createElement("button");
   button.type = "button";
   button.title = title;
+  button.setAttribute("aria-label", title);
   button.className = `apex-icon ${className}`.trim();
   button.appendChild(svgIcon(icon));
   if (label) {
@@ -315,17 +326,9 @@ function textIconButton(text, title) {
   button.type = "button";
   button.textContent = text;
   button.title = title;
+  button.setAttribute("aria-label", title);
   button.className = "apex-icon";
   return button;
-}
-
-
-function toolbarSeparator() {
-  const separator = document.createElement("span");
-  separator.className = "apex-toolbar-separator";
-  separator.setAttribute("role", "separator");
-  separator.setAttribute("aria-orientation", "vertical");
-  return separator;
 }
 
 
@@ -345,6 +348,7 @@ function createPopover(anchor, title, className = "") {
   heading.className = "apex-popover-title";
   heading.textContent = title;
   const close = textIconButton("×", "Close");
+  close.classList.add("apex-popover-close");
   header.append(heading, close);
   panel.appendChild(header);
   document.body.appendChild(panel);
@@ -487,7 +491,7 @@ async function showLoraChooser(node, anchor, sectionId, rowId = null) {
       const namesToAdd = choices.filter((name) => !existingNames.has(name));
       const addAll = document.createElement("button");
       addAll.type = "button";
-      addAll.className = "apex-add-all";
+      addAll.className = "apex-add-all apex-primary-action";
       addAll.textContent = "Add all LoRAs";
       addAll.disabled = namesToAdd.length === 0;
       addAll.title = namesToAdd.length
@@ -617,6 +621,7 @@ async function showFolderChooser(node, anchor) {
     none.textContent = "None";
     const apply = document.createElement("button");
     apply.textContent = "Apply";
+    apply.className = "apex-primary-action";
     actions.append(all, none, apply);
     const list = document.createElement("div");
     list.className = "apex-list";
@@ -719,6 +724,7 @@ function showNodeSettings(node, anchor) {
   const apply = document.createElement("button");
   apply.type = "button";
   apply.textContent = "Apply";
+  apply.className = "apex-primary-action";
   actions.append(reset, apply);
   const savedData = document.createElement("details");
   savedData.className = "apex-saved-data";
@@ -730,14 +736,12 @@ function showNodeSettings(node, anchor) {
   savedData.append(savedSummary, savedEntries);
   const dangerZone = document.createElement("div");
   dangerZone.className = "apex-danger-zone";
-  const dangerText = document.createElement("span");
-  dangerText.textContent = "Delete every saved LoRA identity record and trigger word. LoRA files, workflow rows, sections, presets, and folder settings stay intact; identity records are rebuilt when needed.";
   const clearAll = document.createElement("button");
   clearAll.type = "button";
   clearAll.className = "apex-danger-button";
   clearAll.textContent = "Clear all saved LoRA data";
   clearAll.disabled = true;
-  dangerZone.append(dangerText, clearAll);
+  dangerZone.appendChild(clearAll);
   panel.append(fields, actions, savedData, dangerZone);
 
   let metadataEntries = [];
@@ -964,6 +968,7 @@ async function showTriggerEditor(node, anchor, rowId) {
     const save = document.createElement("button");
     save.type = "button";
     save.textContent = "Save";
+    save.className = "apex-primary-action";
     actions.append(save);
     panel.append(identity, placement, chips, addRow, actions);
 
@@ -1226,8 +1231,10 @@ function showPresetManager(node, anchor) {
   actions.className = "apex-popover-actions";
   const rename = document.createElement("button");
   rename.textContent = "Rename";
+  rename.className = "apex-primary-action";
   const remove = document.createElement("button");
   remove.textContent = "Delete";
+  remove.className = "apex-danger-action";
   actions.append(rename, remove);
   panel.appendChild(actions);
   rename.addEventListener("click", async () => {
@@ -1331,44 +1338,34 @@ function buildToolbar(node) {
     }
     await resolveNodeLoras(node, true);
   });
-  const settings = iconButton("settings", "Configure this Apex LoRA Loader", "apex-tool");
+  const settings = iconButton("settings", "Configure this Apex LoRA Loader", "apex-tool apex-tool-divider");
   settings.addEventListener("click", () => showNodeSettings(node, settings));
-  const addSection = iconButton("listPlus", "Add a named LoRA section", "apex-tool apex-icon-label", "Section");
-  addSection.addEventListener("click", () => {
-    const styles = getComputedStyle(node.__apexRoot);
-    const minimum = parseFloat(styles.getPropertyValue("--apex-section-min-width")) || 320;
-    const gap = parseFloat(styles.getPropertyValue("--apex-section-grid-gap")) || 6;
-    const width = node.__apexStackContent?.clientWidth
-      || Math.max(1, (node.size?.[0] || DEFAULT_SIZE[0]) - 12);
-    const columnCount = responsiveColumnCount(
-      width,
-      node.__apexState.sections.length + 1,
-      minimum,
-      gap,
-    );
-    const lanes = node.__apexStackContent
-      ? directChildren(node.__apexStackContent, "apex-section-column")
-      : [];
-    let column = Math.min(lanes.length, columnCount - 1);
-    if (lanes.length === columnCount && lanes.length) {
-      const heights = lanes.map(sectionLaneContentHeight);
-      column = heights.indexOf(Math.min(...heights));
-    }
-    const section = createSection(`Section ${node.__apexState.sections.length + 1}`, column);
-    addSectionToState(node.__apexState, section, column);
-    commit(node, { presetDirty: false });
-  });
-  toolbar.append(
-    presets,
-    save,
-    manage,
-    toolbarSeparator(),
-    folders,
-    refresh,
-    settings,
-    toolbarSeparator(),
-    addSection,
-  );
+  const presetTools = document.createElement("div");
+  presetTools.className = "apex-toolbar-island apex-toolbar-presets";
+  presetTools.append(presets, save, manage);
+  const rows = allRows(node.__apexState);
+  const enabledRows = rows.filter((row) => row.enabled).length;
+  const sectionCount = node.__apexState.sections.length;
+  const infoTools = document.createElement("div");
+  infoTools.className = "apex-toolbar-island apex-toolbar-info";
+  infoTools.title = `${sectionCount} ${sectionCount === 1 ? "section" : "sections"}, ${rows.length} ${rows.length === 1 ? "LoRA" : "LoRAs"}, ${enabledRows} active`;
+  infoTools.setAttribute("aria-label", infoTools.title);
+  for (const [value, label, className] of [
+    [sectionCount, sectionCount === 1 ? "section" : "sections", ""],
+    [rows.length, rows.length === 1 ? "LoRA" : "LoRAs", ""],
+    [enabledRows, "active", "active"],
+  ]) {
+    const metric = document.createElement("span");
+    metric.className = `apex-toolbar-metric${className ? ` ${className}` : ""}`;
+    const number = document.createElement("strong");
+    number.textContent = String(value);
+    metric.append(number, ` ${label}`);
+    infoTools.appendChild(metric);
+  }
+  const utilityTools = document.createElement("div");
+  utilityTools.className = "apex-toolbar-island apex-toolbar-utilities";
+  utilityTools.append(folders, refresh, settings);
+  toolbar.append(presetTools, infoTools, utilityTools);
   return toolbar;
 }
 
@@ -1406,6 +1403,7 @@ function installStrengthDrag(node, row, input) {
       node.__apexState.settings.strength_drag_step,
     );
     input.value = String(row.strength);
+    setStrengthFill(input, row.strength);
   });
 
   const finish = (event) => {
@@ -1433,24 +1431,27 @@ function installStrengthDrag(node, row, input) {
 }
 
 
+function setStrengthFill(input, value) {
+  const strength = Number(value);
+  const fill = Number.isFinite(strength) ? Math.min(100, Math.abs(strength) * 100) : 0;
+  input.classList.toggle("negative", strength < 0);
+  input.style.setProperty("--apex-strength-fill", `${fill}%`);
+}
+
+
 function clearDragFeedback() {
   document.querySelectorAll(".apex-drop-marker").forEach((element) => element.remove());
   document.querySelectorAll(".apex-row-drag-over, .apex-section-drag-over").forEach((element) => {
     element.classList.remove("apex-row-drag-over", "apex-section-drag-over");
+  });
+  document.querySelectorAll(".apex-column-add-zone.intent").forEach((element) => {
+    element.classList.remove("intent");
   });
 }
 
 
 function directChildren(container, className) {
   return [...container.children].filter((element) => element.classList.contains(className));
-}
-
-
-function sectionLaneContentHeight(lane) {
-  const sections = directChildren(lane, "apex-section");
-  if (!sections.length) return 0;
-  return sections[sections.length - 1].getBoundingClientRect().bottom
-    - lane.getBoundingClientRect().top;
 }
 
 
@@ -1509,7 +1510,7 @@ function buildRow(node, section, row) {
   element.className = `apex-row${showTriggerButton ? " with-trigger" : ""}${row.enabled ? "" : " disabled"}${row.error ? " error" : ""}`;
   element.title = row.error || row.name;
   const handle = document.createElement("span");
-  handle.className = "apex-drag";
+  handle.className = "apex-drag apex-row-drag";
   handle.textContent = "⠿";
   handle.title = "Drag to reorder or move to another section";
   handle.draggable = true;
@@ -1524,18 +1525,28 @@ function buildRow(node, section, row) {
     clearDragFeedback();
   });
 
+  const enabledCell = document.createElement("label");
+  enabledCell.className = "apex-row-enable";
+  enabledCell.title = "Enable or disable this LoRA";
   const enabled = document.createElement("input");
   enabled.type = "checkbox";
   enabled.checked = row.enabled;
+  enabled.setAttribute("aria-label", `Enable ${row.name}`);
   enabled.title = "Enable or disable this LoRA";
   enabled.addEventListener("change", () => {
     row.enabled = enabled.checked;
     commit(node, { presetDirty: true });
   });
+  enabledCell.appendChild(enabled);
 
   const name = document.createElement("button");
   name.type = "button";
   name.className = "apex-lora-name";
+  if (row.error) {
+    const stateIcon = svgIcon("triangleAlert");
+    stateIcon.classList.add("apex-row-state-icon");
+    name.appendChild(stateIcon);
+  }
   name.appendChild(loraNameContent(row.name, node.__apexState.settings));
   name.addEventListener("click", () => showLoraChooser(node, name, section.id, row.id));
 
@@ -1546,15 +1557,18 @@ function buildRow(node, section, row) {
   strength.max = "100";
   strength.step = "0.01";
   strength.value = String(row.strength);
+  setStrengthFill(strength, row.strength);
   strength.title = `Model strength. Drag left or right to adjust by exactly ${node.__apexState.settings.strength_drag_step} per tick; click to type.`;
   strength.addEventListener("change", () => {
     const value = Number(strength.value);
     if (!Number.isFinite(value)) {
       strength.value = String(row.strength);
+      setStrengthFill(strength, row.strength);
       return;
     }
     row.strength = normalizeStrength(value);
     strength.value = String(row.strength);
+    setStrengthFill(strength, row.strength);
     commit(node, { presetDirty: true });
   });
   installStrengthDrag(node, row, strength);
@@ -1577,13 +1591,13 @@ function buildRow(node, section, row) {
     trigger.addEventListener("click", () => showTriggerEditor(node, trigger, row.id));
   }
 
-  const remove = iconButton("trash", "Remove this LoRA");
+  const remove = iconButton("trash", "Remove this LoRA", "apex-row-remove");
   remove.addEventListener("click", () => {
     section.loras.splice(section.loras.indexOf(row), 1);
     commit(node, { presetDirty: true });
   });
 
-  element.append(handle, enabled, name, strength);
+  element.append(handle, enabledCell, name, strength);
   if (trigger) element.appendChild(trigger);
   element.appendChild(remove);
   return element;
@@ -1591,13 +1605,16 @@ function buildRow(node, section, row) {
 
 
 function buildSection(node, section) {
+  const enabledCount = section.loras.filter((row) => row.enabled).length;
   const element = document.createElement("div");
-  element.className = "apex-section";
+  element.className = `apex-section${section.collapsed ? " collapsed" : ""}`;
   element.dataset.sectionId = section.id;
   const header = document.createElement("div");
   header.className = "apex-section-header";
+  const leading = document.createElement("div");
+  leading.className = "apex-section-leading";
   const handle = document.createElement("span");
-  handle.className = "apex-drag";
+  handle.className = "apex-drag apex-section-drag";
   handle.textContent = "⠿";
   handle.title = "Drag to move this section within or between columns";
   handle.draggable = true;
@@ -1616,17 +1633,21 @@ function buildSection(node, section) {
   const collapse = iconButton(
     section.collapsed ? toggleIcons.collapsed : toggleIcons.expanded,
     section.collapsed ? "Expand section" : "Collapse section",
+    "apex-section-collapse",
   );
   collapse.addEventListener("click", () => {
     section.collapsed = !section.collapsed;
     commit(node, { presetDirty: false });
   });
-  const allEnabled = section.loras.length > 0 && section.loras.every((row) => row.enabled);
+  const allEnabled = section.loras.length > 0 && enabledCount === section.loras.length;
   const toggleAll = iconButton(
     "listTodo",
     allEnabled ? "Disable all LoRAs in this section" : "Enable all LoRAs in this section",
+    "apex-section-toggle-all",
   );
   toggleAll.disabled = section.loras.length === 0;
+  toggleAll.classList.toggle("active", allEnabled);
+  toggleAll.setAttribute("aria-pressed", String(allEnabled));
   toggleAll.addEventListener("click", () => {
     toggleSectionRows(section);
     commit(node, { presetDirty: true });
@@ -1643,18 +1664,25 @@ function buildSection(node, section) {
   });
   const count = document.createElement("span");
   count.className = "apex-section-count";
-  count.textContent = `${section.loras.filter((row) => row.enabled).length}/${section.loras.length}`;
+  count.textContent = `${enabledCount}/${section.loras.length}`;
   count.title = "Enabled / total LoRAs";
-  const add = iconButton("plus", "Add a LoRA to this section");
+  const title = document.createElement("div");
+  title.className = "apex-section-title";
+  title.append(name, count);
+  const actions = document.createElement("div");
+  actions.className = "apex-section-actions";
+  const add = iconButton("plus", "Add a LoRA to this section", "apex-section-add");
   add.addEventListener("click", () => showLoraChooser(node, add, section.id));
-  const remove = iconButton("listX", "Delete this section");
+  const remove = iconButton("listX", "Delete this section", "apex-section-remove");
   remove.addEventListener("click", () => {
     if (section.loras.length && !window.confirm(`Delete “${section.name}” and its ${section.loras.length} LoRA row(s)?`)) return;
     node.__apexState.sections.splice(node.__apexState.sections.indexOf(section), 1);
     if (!node.__apexState.sections.length) node.__apexState.sections.push(createSection("LoRAs", 0));
     commit(node, { presetDirty: true });
   });
-  header.append(handle, collapse, toggleAll, name, count, add, remove);
+  leading.append(handle, collapse, toggleAll);
+  actions.append(remove, add);
+  header.append(leading, title, actions);
   element.appendChild(header);
 
   element.addEventListener("dragover", (event) => {
@@ -1729,6 +1757,47 @@ function sectionDropTarget(node, lane, clientY) {
 }
 
 
+function addSectionToColumn(node, column) {
+  const section = createSection(`Section ${node.__apexState.sections.length + 1}`, column);
+  addSectionToState(node.__apexState, section, column);
+  commit(node, { presetDirty: false });
+}
+
+
+function createColumnAddZone(node, column) {
+  const zone = document.createElement("div");
+  zone.className = "apex-column-add-zone";
+  zone.dataset.column = String(column);
+  const add = iconButton(
+    "listPlus",
+    `Add a new section to column ${column + 1}`,
+    "apex-column-add-button",
+    "Add section",
+  );
+
+  const hide = () => {
+    zone.classList.remove("intent");
+  };
+  const show = (event) => {
+    if (dragPayload || event.buttons !== 0) return;
+    zone.classList.add("intent");
+  };
+
+  zone.addEventListener("pointerenter", show);
+  zone.addEventListener("pointerleave", hide);
+  zone.addEventListener("pointercancel", hide);
+  add.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!zone.classList.contains("intent")) return;
+    hide();
+    addSectionToColumn(node, column);
+  });
+  zone.appendChild(add);
+  return zone;
+}
+
+
 function createSectionLane(node, column) {
   const lane = document.createElement("div");
   lane.className = "apex-section-column";
@@ -1798,6 +1867,7 @@ function layoutSections(node) {
         if (element) lanes[column].appendChild(element);
       }
     });
+    lanes.forEach((lane, column) => lane.appendChild(createColumnAddZone(node, column)));
     content.replaceChildren(...lanes);
   }
 
@@ -1850,6 +1920,8 @@ function renderNode(node) {
 function buildNodeUI(node) {
   if (node.__apexBuilt) return;
   node.__apexBuilt = true;
+  if (node.color == null) node.color = NODE_TITLE_COLOR;
+  if (node.bgcolor == null) node.bgcolor = NODE_BODY_COLOR;
   injectStyles();
   const widget = dataWidget(node);
   hideDataWidget(widget);

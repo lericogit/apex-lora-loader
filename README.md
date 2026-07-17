@@ -7,7 +7,7 @@
 Organize, filter, reorder, preset, recover, and annotate large LoRA stacks in one compact node.
 
 [![License: MIT][license-shield]][license-link]
-[![Version: v0.1.1][version-shield]][version-link]
+[![Version: v0.2][version-shield]][version-link]
 [![ComfyUI Custom Node][comfyui-shield]][comfyui-link]
 [![Local only][local-shield]][local-link]
 [![No extra packages][dependencies-shield]][dependencies-link]
@@ -15,9 +15,9 @@ Organize, filter, reorder, preset, recover, and annotate large LoRA stacks in on
 </div>
 
 <p align="center">
-  <img src="docs/images/apex_lora_img_5.png" alt="Apex LoRA Loader with three responsive LoRA sections" width="100%">
+  <img src="docs/images/apex_lora_loader_img_1.png" alt="Apex LoRA Loader with responsive columns, compact LoRA rows, toolbar islands, and an Add Section area" width="100%">
   <br>
-  <sub>A responsive stack with named sections, compact rows, independent strengths, and per-LoRA enable controls.</sub>
+  <sub>A responsive LoRA workspace with manual columns, compact controls, live stack information, and an intentional dark interface.</sub>
 </p>
 
 > [!NOTE]
@@ -43,6 +43,7 @@ The node intentionally has no CLIP socket. LoRAs are applied to `MODEL` with zer
 - Compact LoRA rows with enable toggles, searchable selection, strength control, trigger metadata, and removal.
 - Named, collapsible, draggable sections with cross-section row reordering.
 - Responsive manual section columns with stable placement and independent vertical stacking.
+- A polished dark interface with split toolbar islands, responsive stack metrics, and a subtle blue-teal fog surface.
 - Recursive per-node folder filters with All, None, Root, and multi-folder selection.
 - Confirmed **Add all LoRAs** action for the current filtered library.
 - Installation-wide presets that restore enabled states and strengths without replacing the current stack.
@@ -61,7 +62,21 @@ When the node becomes wider, Apex creates additional section columns. Each colum
 
 The section width limits and gap are exposed as CSS variables near the top of `web/apex_lora_loader.css` for easy tuning. Lane membership changes only at responsive column breakpoints; section heights and overall stack height are handled by the browser.
 
-The toolbar remains fixed while the stack uses the remaining node height and scrolls when necessary.
+New sections are created from the large Add section area directly beneath the final section in a column. It appears only while hovering over available column space and never reserves extra scroll height while hidden. The toolbar remains fixed while the stack uses the remaining node height and scrolls only when its visible content requires it.
+
+The toolbar is divided into compact control islands for presets, live section/LoRA counts, and library utilities. The information island disappears automatically when the node is too narrow, leaving the functional controls uncluttered.
+
+<p align="center">
+  <img src="docs/images/add_section_loras.gif" alt="Creating a new Apex section and adding LoRAs to it" width="90%">
+  <br>
+  <sub>Create a section in its intended column, then add individual or filtered LoRAs without leaving the node.</sub>
+</p>
+
+<p align="center">
+  <img src="docs/images/drag_and_drop.gif" alt="Dragging Apex LoRA sections and rows within and between columns" width="90%">
+  <br>
+  <sub>Reorder sections and LoRA rows with clear insertion targets, including moves between sections and columns.</sub>
+</p>
 
 ### Folder filtering and LoRA selection
 
@@ -75,15 +90,9 @@ Folder filters are stored per node and affect only the chooser:
 Existing rows keep loading even if their folders are later excluded from the chooser. **Add all LoRAs** adds every currently offered LoRA that is not already in the destination section after confirming the exact count and section name.
 
 <p align="center">
-  <img src="docs/images/apex_lora_img_1.png" alt="Recursive Apex LoRA folder selector" width="72%">
+  <img src="docs/images/apex_lora_loader_img_3.png" alt="Recursive Apex LoRA folder selector with multiple selected folders" width="72%">
   <br>
   <sub>Select one or more recursive folder branches for each node's LoRA chooser.</sub>
-</p>
-
-<p align="center">
-  <img src="docs/images/apex_lora_img_3.png" alt="Filtered Add LoRA dialog with bulk-add control" width="100%">
-  <br>
-  <sub>Search the filtered library, add individual LoRAs, or populate a section with every offered LoRA.</sub>
 </p>
 
 ### Strength control
@@ -122,9 +131,9 @@ Only enabled rows with nonzero strength contribute trigger words. Words follow v
 The row tag button is hidden by default and can be enabled in Settings.
 
 <p align="center">
-  <img src="docs/images/apex_lora_img_2.png" alt="Apex trigger-word editor with active chips and append placement" width="72%">
+  <img src="docs/images/trigger_word.gif" alt="Editing and selecting multiple trigger words for an Apex LoRA row" width="82%">
   <br>
-  <sub>Maintain multiple trigger words, choose the active entries, and place them before or after the prompt.</sub>
+  <sub>Add, remove, and independently activate trigger words, then place them before or after the incoming prompt.</sub>
 </p>
 
 ### Settings
@@ -140,7 +149,7 @@ The compact settings popup provides per-node controls for:
 - Clearing all saved identities and trigger words through a guarded danger action.
 
 <p align="center">
-  <img src="docs/images/apex_lora_img_4.png" alt="Apex node settings and saved LoRA data controls" width="100%">
+  <img src="docs/images/apex_lora_loader_img_2.png" alt="Apex node settings with display controls, strength step, saved LoRA data, and guarded clearing" width="60%">
   <br>
   <sub>Per-node display and strength controls alongside local identity and trigger-word data management.</sub>
 </p>
@@ -224,7 +233,7 @@ Embedded Lucide icons retain their ISC terms, and Feather-derived Lucide icons r
 
 [license-shield]: https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square
 [license-link]: LICENSE
-[version-shield]: https://img.shields.io/badge/version-v0.1.1-1f6feb?style=flat-square
+[version-shield]: https://img.shields.io/badge/version-v0.2-1f6feb?style=flat-square
 [version-link]: https://github.com/lericogit/apex-lora-loader/releases
 [comfyui-shield]: https://img.shields.io/badge/ComfyUI-custom_node-6f42c1?style=flat-square
 [comfyui-link]: https://github.com/Comfy-Org/ComfyUI
