@@ -5,9 +5,11 @@ import {
   addSection,
   addTriggerWord,
   assignSectionColumns,
+  applyFullPreset,
   applyPreset,
   createSection,
   insertionIndexFromMidpoints,
+  fullPresetStateFromState,
   matchesFolderFilters,
   moveRow,
   moveSection,
@@ -370,4 +372,107 @@ test("duplicate identities are matched in row order and transient errors are not
   assert.equal(state.sections[0].loras[0].strength, 0.2);
   assert.equal(state.sections[0].loras[2].strength, 0.7);
   assert.equal(serializeState(state).includes("missing"), false);
+});
+
+
+test("full preset snapshots preserve the complete normalized setup only", () => {
+  const state = sampleState();
+  state.active_preset_id = "currently-selected";
+  state.folder_filters = ["styles", ""];
+  state.settings = {
+    show_safetensors: false,
+    show_folder_paths: true,
+    show_trigger_button: true,
+    strength_drag_step: 0.057,
+  };
+  state.sections[0].collapsed = true;
+  state.sections[0].column = 1;
+  state.sections[0].loras[0].enabled = false;
+  state.sections[0].loras[0].strength = 0.456;
+  state.sections[0].loras[0].trigger_words = ["portrait", "detail"];
+  state.sections[0].loras[0].active_trigger_words = ["detail"];
+  state.sections[0].loras[0].trigger_position = "prepend";
+  state.sections[0].loras[0].error = "missing";
+  state.unknown = "discard";
+
+  const snapshot = fullPresetStateFromState(state);
+
+  assert.equal(snapshot.version, 1);
+  assert.deepEqual(snapshot.folder_filters, ["styles", ""]);
+  assert.deepEqual(snapshot.settings, {
+    show_safetensors: false,
+    show_folder_paths: true,
+    show_trigger_button: true,
+    strength_drag_step: 0.06,
+  });
+  assert.deepEqual(snapshot.sections.map((section) => section.id), ["s1", "s2"]);
+  assert.deepEqual(snapshot.sections[0].loras.map((item) => item.id), ["a", "b"]);
+  assert.equal(snapshot.sections[0].collapsed, true);
+  assert.equal(snapshot.sections[0].column, 1);
+  assert.equal(snapshot.sections[0].loras[0].enabled, false);
+  assert.equal(snapshot.sections[0].loras[0].strength, 0.46);
+  assert.deepEqual(snapshot.sections[0].loras[0].active_trigger_words, ["detail"]);
+  assert.equal(snapshot.sections[0].loras[0].trigger_position, "prepend");
+  assert.equal("active_preset_id" in snapshot, false);
+  assert.equal("error" in snapshot.sections[0].loras[0], false);
+  assert.equal("unknown" in snapshot, false);
+});
+
+
+test("full preset application replaces the setup and selects the preset", () => {
+  const state = normalizeState(sampleState());
+  state.sections[0].loras[0].error = "old transient error";
+  const presetState = fullPresetStateFromState(normalizeState({
+    version: 1,
+    folder_filters: ["characters"],
+    active_preset_id: "must-not-leak",
+    settings: {
+      show_safetensors: false,
+      show_folder_paths: false,
+      show_trigger_button: true,
+      strength_drag_step: 0.05,
+    },
+    sections: [
+      {
+        id: "saved-two",
+        name: "Second saved section",
+        collapsed: true,
+        column: 1,
+        loras: [row("saved-b", "saved/B.safetensors", "e".repeat(64), false, -0.25)],
+      },
+      {
+        id: "saved-one",
+        name: "First saved section",
+        collapsed: false,
+        column: 0,
+        loras: [row("saved-a", "saved/A.safetensors", "d".repeat(64), true, 0.75)],
+      },
+    ],
+  }));
+  presetState.sections[1].loras[0].trigger_words = ["saved trigger"];
+  presetState.sections[1].loras[0].active_trigger_words = ["saved trigger"];
+  presetState.sections[1].loras[0].trigger_position = "prepend";
+
+  applyFullPreset(state, {
+    id: "full-preset",
+    name: "Complete setup",
+    type: "full",
+    state: presetState,
+  });
+
+  assert.equal(state.active_preset_id, "full-preset");
+  assert.deepEqual(state.folder_filters, ["characters"]);
+  assert.deepEqual(state.settings, presetState.settings);
+  assert.deepEqual(state.sections.map((section) => section.id), ["saved-two", "saved-one"]);
+  assert.deepEqual(state.sections.map((section) => section.column), [1, 0]);
+  assert.deepEqual(state.sections.map((section) => section.collapsed), [true, false]);
+  assert.deepEqual(state.sections[0].loras.map((item) => item.id), ["saved-b"]);
+  assert.equal(state.sections[0].loras[0].enabled, false);
+  assert.equal(state.sections[0].loras[0].strength, -0.25);
+  assert.deepEqual(state.sections[1].loras[0].active_trigger_words, ["saved trigger"]);
+  assert.equal(state.sections[1].loras[0].trigger_position, "prepend");
+  assert.equal(serializeState(state).includes("root.safetensors"), false);
+
+  presetState.sections[0].name = "mutated after apply";
+  assert.equal(state.sections[0].name, "Second saved section");
 });

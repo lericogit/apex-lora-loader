@@ -7,10 +7,12 @@ import {
   addTriggerWord,
   assignSectionColumns,
   allRows,
+  applyFullPreset,
   applyPreset,
   createRow,
   createSection,
   insertionIndexFromMidpoints,
+  fullPresetStateFromState,
   matchesFolderFilters,
   moveRow,
   moveSection,
@@ -20,6 +22,7 @@ import {
   normalizeTriggerMetadata,
   normalizeTriggerPosition,
   presetEntriesFromState,
+  presetType,
   responsiveColumnCount,
   sectionColumn,
   sectionsByVisibleColumn,
@@ -59,6 +62,13 @@ const ICONS = {
       ["path", { d: "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" }],
       ["path", { d: "M3 6h18" }],
       ["path", { d: "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" }],
+    ],
+  },
+  x: {
+    className: "lucide-x",
+    nodes: [
+      ["path", { d: "M18 6 6 18" }],
+      ["path", { d: "m6 6 12 12" }],
     ],
   },
   listPlus: {
@@ -120,15 +130,11 @@ const ICONS = {
       ["circle", { cx: "18", cy: "18", r: "3" }],
     ],
   },
-  fileSliders: {
-    className: "lucide-file-sliders",
+  pencil: {
+    className: "lucide-pencil",
     nodes: [
-      ["path", { d: "M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" }],
-      ["path", { d: "M14 2v5a1 1 0 0 0 1 1h5" }],
-      ["path", { d: "M8 12h8" }],
-      ["path", { d: "M10 11v2" }],
-      ["path", { d: "M8 17h8" }],
-      ["path", { d: "M14 16v2" }],
+      ["path", { d: "M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" }],
+      ["path", { d: "m15 5 4 4" }],
     ],
   },
   settings: {
@@ -231,7 +237,7 @@ async function loadCatalog(force = false) {
 
 async function loadPresets(force = false) {
   if (force || presetsCache === null) {
-    const data = await fetchJson("/apex_lora_loader/presets");
+    const data = await fetchJson("/apex_lora_loader/presets", { cache: "no-store" });
     presetsCache = Array.isArray(data.presets) ? data.presets : [];
   }
   return presetsCache;
@@ -273,8 +279,13 @@ function setStatus(node, message = "", error = false) {
 }
 
 
-function commit(node, { presetDirty = false, render = true } = {}) {
-  if (presetDirty) node.__apexState.active_preset_id = null;
+function commit(node, { presetDirty = false, fullPresetDirty = false, render = true } = {}) {
+  const selectedPreset = node.__apexPresets?.find(
+    (preset) => preset.id === node.__apexState.active_preset_id,
+  );
+  if (presetDirty || (fullPresetDirty && presetType(selectedPreset) === "full")) {
+    node.__apexState.active_preset_id = null;
+  }
   const widget = dataWidget(node);
   if (widget) widget.value = serializeState(node.__apexState);
   node.graph?.change?.();
@@ -669,7 +680,7 @@ async function showFolderChooser(node, anchor) {
       node.__apexState.folder_filters = draft === null
         ? null
         : [...new Set(draft)].sort((a, b) => a.localeCompare(b));
-      commit(node, { presetDirty: false });
+      commit(node, { fullPresetDirty: true });
       close();
     });
     renderFolders();
@@ -872,7 +883,7 @@ function showNodeSettings(node, anchor) {
       show_trigger_button: showTriggerButton.checked,
       strength_drag_step: step,
     });
-    commit(node, { presetDirty: false });
+    commit(node, { fullPresetDirty: true });
     close();
     setStatus(node, "Node settings updated.");
   });
@@ -888,7 +899,7 @@ function updateOpenTriggerMetadata(sha256, value, deferredNode = null) {
       if (row.sha256.toLocaleLowerCase() !== normalized) continue;
       changed = applyTriggerMetadata(row, value) || changed;
     }
-    if (changed && node !== deferredNode) commit(node, { presetDirty: false });
+    if (changed && node !== deferredNode) commit(node, { fullPresetDirty: true });
   }
 }
 
@@ -902,7 +913,7 @@ function clearOpenTriggerMetadata(sha256 = null) {
       if (normalized !== null && row.sha256.toLocaleLowerCase() !== normalized) continue;
       changed = applyTriggerMetadata(row, {}) || changed;
     }
-    if (changed) commit(node, { presetDirty: false });
+    if (changed) commit(node, { fullPresetDirty: true });
   }
 }
 
@@ -1062,7 +1073,7 @@ async function showTriggerEditor(node, anchor, rowId) {
         row.trigger_position = draftPosition;
         applyTriggerMetadata(row, savedMetadata);
         updateOpenTriggerMetadata(saved.sha256, savedMetadata, node);
-        commit(node, { presetDirty: false });
+        commit(node, { fullPresetDirty: true });
         const count = savedMetadata.trigger_words.length;
         setStatus(
           node,
@@ -1157,119 +1168,360 @@ async function resolveNodeLoras(node, force = false) {
 }
 
 
-async function ensureEnabledIdentities(node) {
-  const rows = allRows(node.__apexState).filter(
-    (row) => row.enabled && (!/^[0-9a-f]{64}$/i.test(row.sha256) || !Number.isInteger(row.size)),
+async function ensurePresetIdentities(node, includeDisabled = false) {
+  const rows = allRows(node.__apexState).filter((row) =>
+    (includeDisabled || row.enabled)
+    && (!/^[0-9a-f]{64}$/i.test(row.sha256) || !Number.isInteger(row.size)),
   );
   if (!rows.length) return;
-  const identities = await identifyNames(rows.map((row) => row.name));
-  identities.forEach((identity, index) => {
-    Object.assign(rows[index], identity);
-    applyTriggerMetadata(rows[index], identity);
-  });
+  for (let index = 0; index < rows.length; index += 512) {
+    const batch = rows.slice(index, index + 512);
+    const identities = await identifyNames(batch.map((row) => row.name));
+    if (identities.length !== batch.length) {
+      throw new Error("Not every LoRA could be identified for this preset.");
+    }
+    identities.forEach((identity, identityIndex) => {
+      Object.assign(batch[identityIndex], identity);
+      applyTriggerMetadata(batch[identityIndex], identity);
+    });
+  }
   commit(node, { presetDirty: false, render: false });
+}
+
+
+function publishPresets(presets, sourceNode = null) {
+  presetsCache = presets;
+  const nodes = new Set(app.graph?._nodes || []);
+  if (sourceNode) nodes.add(sourceNode);
+  for (const node of nodes) {
+    if (!node.__apexState || !node.__apexRoot) continue;
+    node.__apexPresets = presets;
+    renderNode(node);
+  }
 }
 
 
 async function refreshPresetNodes(activeId = null) {
   presetsCache = null;
   const presets = await loadPresets(true);
-  for (const node of app.graph?._nodes || []) {
-    if ((node.comfyClass || node.type) !== NODE_CLASS || !node.__apexState) continue;
-    node.__apexPresets = presets;
-    if (activeId && node === app.canvas?.current_node) node.__apexState.active_preset_id = activeId;
-    renderNode(node);
+  if (activeId && app.canvas?.current_node?.__apexState) {
+    app.canvas.current_node.__apexState.active_preset_id = activeId;
   }
+  publishPresets(presets);
   return presets;
 }
 
 
-async function savePreset(node) {
-  try {
-    await ensureEnabledIdentities(node);
-    const current = node.__apexPresets?.find(
-      (preset) => preset.id === node.__apexState.active_preset_id,
-    );
-    const name = window.prompt("Preset name", current?.name || "");
-    if (name === null || !name.trim()) return;
+function showSavePreset(node, anchor) {
+  const current = node.__apexPresets?.find(
+    (preset) => preset.id === node.__apexState.active_preset_id,
+  );
+  let selectedType = presetType(current);
+  const { panel, close } = createPopover(anchor, "Save preset", "apex-preset-save");
+  const nameLabel = document.createElement("label");
+  nameLabel.className = "apex-preset-name-field";
+  const nameCaption = document.createElement("span");
+  nameCaption.textContent = "Preset name";
+  const name = document.createElement("input");
+  name.type = "text";
+  name.maxLength = 100;
+  name.value = current?.name || "";
+  name.placeholder = "Name this preset";
+  nameLabel.append(nameCaption, name);
+
+  const typeLabel = document.createElement("span");
+  typeLabel.className = "apex-preset-type-label";
+  typeLabel.textContent = "What should be saved?";
+  const types = document.createElement("div");
+  types.className = "apex-preset-types";
+  const typeButtons = new Map();
+  for (const [type, title, description] of [
+    ["active", "Active states only", "Enabled LoRAs and strengths only. Your current stack stays intact when applied."],
+    ["full", "Full setup", "Folders, settings, sections, LoRA order, states, strengths, and trigger configuration."],
+  ]) {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = "apex-preset-type";
+    const heading = document.createElement("strong");
+    heading.textContent = title;
+    const detail = document.createElement("span");
+    detail.textContent = description;
+    option.append(heading, detail);
+    option.addEventListener("click", () => {
+      selectedType = type;
+      for (const [value, button] of typeButtons) {
+        const active = value === selectedType;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-pressed", String(active));
+      }
+    });
+    typeButtons.set(type, option);
+    types.appendChild(option);
+  }
+  typeButtons.get(selectedType)?.click();
+
+  const actions = document.createElement("div");
+  actions.className = "apex-popover-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.textContent = "Cancel";
+  const save = document.createElement("button");
+  save.type = "button";
+  save.textContent = "Save preset";
+  save.className = "apex-primary-action";
+  actions.append(cancel, save);
+  panel.append(nameLabel, typeLabel, types, actions);
+  cancel.addEventListener("click", close);
+
+  const saveCurrentPreset = async () => {
+    if (save.disabled) return;
+    const presetName = name.value.trim();
+    if (!presetName) {
+      name.focus();
+      setStatus(node, "Preset name cannot be empty.", true);
+      return;
+    }
     const existing = node.__apexPresets?.find(
-      (preset) => preset.name.toLocaleLowerCase() === name.trim().toLocaleLowerCase(),
+      (preset) => preset.name.toLocaleLowerCase() === presetName.toLocaleLowerCase(),
     );
     if (existing && !window.confirm(`Overwrite preset “${existing.name}”?`)) return;
-    const preset = {
-      id: existing?.id || current?.id || crypto.randomUUID(),
-      name: name.trim(),
-      entries: presetEntriesFromState(node.__apexState),
-    };
-    const saved = await fetchJson("/apex_lora_loader/presets", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(preset),
-    });
-    node.__apexState.active_preset_id = saved.id;
-    commit(node, { presetDirty: false });
-    await refreshPresetNodes();
-    node.__apexState.active_preset_id = saved.id;
-    commit(node, { presetDirty: false });
-    setStatus(node, `Saved preset “${saved.name}”.`);
-  } catch (error) {
-    setStatus(node, error.message, true);
-  }
+    try {
+      save.disabled = true;
+      cancel.disabled = true;
+      name.disabled = true;
+      for (const button of typeButtons.values()) button.disabled = true;
+      setStatus(node, selectedType === "full" ? "Preparing full setup preset…" : "Preparing active LoRA preset…");
+      await ensurePresetIdentities(node, selectedType === "full");
+      const preset = {
+        id: existing?.id || current?.id || crypto.randomUUID(),
+        name: presetName,
+        type: selectedType,
+        ...(selectedType === "full"
+          ? { state: fullPresetStateFromState(node.__apexState) }
+          : { entries: presetEntriesFromState(node.__apexState) }),
+      };
+      const saved = await fetchJson("/apex_lora_loader/presets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(preset),
+      });
+      close();
+      node.__apexState.active_preset_id = saved.id;
+      commit(node, { presetDirty: false, render: false });
+      const presets = [
+        ...(node.__apexPresets || []).filter((preset) => preset.id !== saved.id),
+        saved,
+      ].sort((left, right) => left.name.localeCompare(right.name));
+      publishPresets(presets, node);
+      setStatus(
+        node,
+        `Saved ${presetType(saved) === "full" ? "full setup" : "active LoRA"} preset “${saved.name}”.`,
+      );
+    } catch (error) {
+      save.disabled = false;
+      cancel.disabled = false;
+      name.disabled = false;
+      for (const button of typeButtons.values()) button.disabled = false;
+      setStatus(node, error.message, true);
+    }
+  };
+  save.addEventListener("click", saveCurrentPreset);
+  name.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    saveCurrentPreset();
+  });
+  setTimeout(() => {
+    name.focus();
+    name.select();
+  }, 20);
 }
 
 
-function showPresetManager(node, anchor) {
-  const preset = node.__apexPresets?.find(
-    (item) => item.id === node.__apexState.active_preset_id,
+function buildPresetMenuRow(node, preset, close) {
+  const row = document.createElement("div");
+  const selected = node.__apexState.active_preset_id === preset.id;
+  row.className = `apex-preset-menu-row${selected ? " active" : ""}`;
+
+  const apply = document.createElement("button");
+  apply.type = "button";
+  apply.className = "apex-preset-menu-apply";
+  apply.title = `Apply ${presetType(preset) === "full" ? "full setup" : "active-state"} preset “${preset.name}”`;
+  const name = document.createElement("span");
+  name.textContent = preset.name;
+  apply.appendChild(name);
+  apply.addEventListener("click", () => {
+    if (applySelectedPreset(node, preset.id)) close();
+  });
+
+  const rename = iconButton(
+    "pencil",
+    `Rename preset “${preset.name}”`,
+    "apex-preset-row-action apex-preset-rename",
   );
-  if (!preset) {
-    setStatus(node, "Select a preset to rename or delete.", true);
-    return;
-  }
-  const { panel, close } = createPopover(anchor, `Manage “${preset.name}”`, "apex-preset-manager");
-  const actions = document.createElement("div");
-  actions.className = "apex-popover-actions";
-  const rename = document.createElement("button");
-  rename.textContent = "Rename";
-  rename.className = "apex-primary-action";
-  const remove = document.createElement("button");
-  remove.textContent = "Delete";
-  remove.className = "apex-danger-action";
-  actions.append(rename, remove);
-  panel.appendChild(actions);
-  rename.addEventListener("click", async () => {
-    const name = window.prompt("New preset name", preset.name);
-    if (name === null || !name.trim() || name.trim() === preset.name) return;
+  const remove = iconButton(
+    "trash",
+    `Delete preset “${preset.name}”`,
+    "apex-preset-row-action apex-preset-delete",
+  );
+  let renameInput = null;
+  let busy = false;
+
+  const finishRename = async () => {
+    if (!renameInput || busy) return;
+    const nextName = renameInput.value.trim();
+    if (!nextName) {
+      renameInput.focus();
+      setStatus(node, "Preset name cannot be empty.", true);
+      return;
+    }
+    if (nextName === preset.name) {
+      renameInput.replaceWith(apply);
+      renameInput = null;
+      rename.classList.remove("active");
+      rename.title = `Rename preset “${preset.name}”`;
+      remove.disabled = false;
+      return;
+    }
+    busy = true;
+    renameInput.disabled = true;
+    rename.disabled = true;
     try {
       const updated = await fetchJson(`/apex_lora_loader/presets/${encodeURIComponent(preset.id)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim() }),
+        body: JSON.stringify({ name: nextName }),
       });
-      await refreshPresetNodes();
-      node.__apexState.active_preset_id = updated.id;
-      commit(node, { presetDirty: false });
-      setStatus(node, `Renamed preset to “${updated.name}”.`);
+      const presets = [
+        ...(node.__apexPresets || []).filter((item) => item.id !== updated.id),
+        updated,
+      ].sort((left, right) => left.name.localeCompare(right.name));
       close();
+      publishPresets(presets, node);
+      setStatus(node, `Renamed preset to “${updated.name}”.`);
     } catch (error) {
+      busy = false;
+      renameInput.disabled = false;
+      rename.disabled = false;
+      renameInput.focus();
       setStatus(node, error.message, true);
     }
+  };
+
+  rename.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (renameInput) {
+      finishRename();
+      return;
+    }
+    renameInput = document.createElement("input");
+    renameInput.className = "apex-preset-rename-input";
+    renameInput.type = "text";
+    renameInput.maxLength = 100;
+    renameInput.value = preset.name;
+    apply.replaceWith(renameInput);
+    rename.classList.add("active");
+    rename.title = "Save preset name";
+    remove.disabled = true;
+    renameInput.addEventListener("keydown", (inputEvent) => {
+      if (inputEvent.key === "Enter") {
+        inputEvent.preventDefault();
+        finishRename();
+      } else if (inputEvent.key === "Escape") {
+        inputEvent.preventDefault();
+        renameInput.replaceWith(apply);
+        renameInput = null;
+        rename.classList.remove("active");
+        rename.title = `Rename preset “${preset.name}”`;
+        remove.disabled = false;
+        rename.focus();
+      }
+    });
+    setTimeout(() => {
+      renameInput?.focus();
+      renameInput?.select();
+    }, 0);
   });
-  remove.addEventListener("click", async () => {
-    if (!window.confirm(`Delete preset “${preset.name}”?`)) return;
+
+  remove.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    if (busy || !window.confirm(`Delete preset “${preset.name}”?`)) return;
+    busy = true;
+    rename.disabled = true;
+    remove.disabled = true;
     try {
       await fetchJson(`/apex_lora_loader/presets/${encodeURIComponent(preset.id)}`, {
         method: "DELETE",
       });
-      node.__apexState.active_preset_id = null;
-      commit(node, { presetDirty: false });
-      await refreshPresetNodes();
-      setStatus(node, `Deleted preset “${preset.name}”.`);
+      const presetNodes = new Set(app.graph?._nodes || []);
+      presetNodes.add(node);
+      for (const presetNode of presetNodes) {
+        if (presetNode.__apexState?.active_preset_id !== preset.id) continue;
+        presetNode.__apexState.active_preset_id = null;
+        commit(presetNode, { presetDirty: false, render: false });
+      }
+      const presets = (node.__apexPresets || []).filter((item) => item.id !== preset.id);
       close();
+      publishPresets(presets, node);
+      setStatus(node, `Deleted preset “${preset.name}”.`);
     } catch (error) {
+      busy = false;
+      rename.disabled = false;
+      remove.disabled = false;
       setStatus(node, error.message, true);
     }
   });
+
+  row.append(apply, rename, remove);
+  return row;
+}
+
+
+function showPresetDropdown(node, anchor) {
+  const { panel, close } = createPopover(anchor, "Presets", "apex-preset-dropdown");
+  const list = document.createElement("div");
+  list.className = "apex-preset-menu";
+  const selectedPreset = node.__apexPresets?.some(
+    (preset) => preset.id === node.__apexState.active_preset_id,
+  );
+  const custom = document.createElement("button");
+  custom.type = "button";
+  custom.className = `apex-preset-custom${selectedPreset ? "" : " active"}`;
+  const customName = document.createElement("span");
+  customName.textContent = "Custom";
+  custom.appendChild(customName);
+  custom.addEventListener("click", () => {
+    close();
+    applySelectedPreset(node, "");
+  });
+  list.appendChild(custom);
+
+  for (const [type, label] of [
+    ["active", "Active-state presets"],
+    ["full", "Full setup presets"],
+  ]) {
+    const presets = (node.__apexPresets || []).filter((preset) => presetType(preset) === type);
+    if (!presets.length) continue;
+    const group = document.createElement("section");
+    group.className = "apex-preset-menu-group";
+    const heading = document.createElement("div");
+    heading.className = "apex-preset-menu-heading";
+    const title = document.createElement("span");
+    title.textContent = label;
+    const count = document.createElement("small");
+    count.textContent = String(presets.length);
+    heading.append(title, count);
+    group.appendChild(heading);
+    for (const preset of presets) group.appendChild(buildPresetMenuRow(node, preset, close));
+    list.appendChild(group);
+  }
+  if (!(node.__apexPresets || []).length) {
+    const empty = document.createElement("div");
+    empty.className = "apex-preset-menu-empty";
+    empty.textContent = "No presets saved yet.";
+    list.appendChild(empty);
+  }
+  panel.appendChild(list);
 }
 
 
@@ -1278,7 +1530,22 @@ function applySelectedPreset(node, presetId) {
   if (!preset) {
     node.__apexState.active_preset_id = null;
     commit(node, { presetDirty: false });
-    return;
+    return true;
+  }
+  if (
+    presetType(preset) === "full"
+    && !window.confirm(
+      `Apply full setup preset “${preset.name}”?\n\nThis will replace the current folder filters, node settings, sections, LoRA rows, ordering, enabled states, strengths, and trigger-word configuration.\n\nContinue?`,
+    )
+  ) return false;
+  if (presetType(preset) === "full") {
+    const result = applyFullPreset(node.__apexState, preset);
+    commit(node, { presetDirty: false });
+    setStatus(
+      node,
+      `Applied full setup “${preset.name}” with ${result.sections} section${result.sections === 1 ? "" : "s"} and ${result.loras} LoRA${result.loras === 1 ? "" : "s"}.`,
+    );
+    return true;
   }
   const result = applyPreset(node.__apexState, preset);
   commit(node, { presetDirty: false });
@@ -1289,37 +1556,34 @@ function applySelectedPreset(node, presetId) {
       : `Applied preset “${preset.name}”.`,
     false,
   );
+  return true;
 }
 
 
 function buildToolbar(node) {
   const toolbar = document.createElement("div");
   toolbar.className = "apex-toolbar";
-  const presets = document.createElement("select");
-  presets.title = "Apply a global state preset";
-  const custom = document.createElement("option");
-  custom.value = "";
-  custom.textContent = "Custom";
-  presets.appendChild(custom);
-  for (const preset of node.__apexPresets || []) {
-    const option = document.createElement("option");
-    option.value = preset.id;
-    option.textContent = preset.name;
-    presets.appendChild(option);
-  }
-  presets.value = node.__apexPresets?.some(
+  const selectedPreset = node.__apexPresets?.find(
     (preset) => preset.id === node.__apexState.active_preset_id,
-  ) ? node.__apexState.active_preset_id : "";
-  presets.addEventListener("change", () => applySelectedPreset(node, presets.value));
+  );
+  const presetMenu = document.createElement("button");
+  presetMenu.type = "button";
+  presetMenu.className = "apex-preset-select";
+  presetMenu.title = selectedPreset
+    ? `${presetType(selectedPreset) === "full" ? "Full setup" : "Active-state"} preset: ${selectedPreset.name}`
+    : "Custom node state";
+  presetMenu.setAttribute("aria-haspopup", "menu");
+  const presetLabel = document.createElement("span");
+  presetLabel.textContent = selectedPreset?.name || "Custom";
+  presetMenu.append(presetLabel, svgIcon("chevronDown"));
+  presetMenu.addEventListener("click", () => showPresetDropdown(node, presetMenu));
 
   const save = iconButton(
     "savePlus",
-    "Save the current enabled LoRAs and strengths as a global preset",
+    "Save active LoRAs or the complete node setup as a global preset",
     "apex-tool",
   );
-  save.addEventListener("click", () => savePreset(node));
-  const manage = iconButton("fileSliders", "Rename or delete the selected preset", "apex-tool");
-  manage.addEventListener("click", () => showPresetManager(node, manage));
+  save.addEventListener("click", () => showSavePreset(node, save));
   const filters = node.__apexState.folder_filters;
   const folderLabel = filters === null ? "Folders: All" : filters.length ? `Folders: ${filters.length}` : "Folders: None";
   const folders = iconButton(
@@ -1342,7 +1606,7 @@ function buildToolbar(node) {
   settings.addEventListener("click", () => showNodeSettings(node, settings));
   const presetTools = document.createElement("div");
   presetTools.className = "apex-toolbar-island apex-toolbar-presets";
-  presetTools.append(presets, save, manage);
+  presetTools.append(presetMenu, save);
   const rows = allRows(node.__apexState);
   const enabledRows = rows.filter((row) => row.enabled).length;
   const sectionCount = node.__apexState.sections.length;
@@ -1499,7 +1763,7 @@ function installRowDropTarget(node, section, rows) {
     moveRow(node.__apexState, dragPayload.rowId, section.id, target.index);
     dragPayload = null;
     clearDragFeedback();
-    commit(node, { presetDirty: false });
+    commit(node, { fullPresetDirty: true });
   });
 }
 
@@ -1591,7 +1855,7 @@ function buildRow(node, section, row) {
     trigger.addEventListener("click", () => showTriggerEditor(node, trigger, row.id));
   }
 
-  const remove = iconButton("trash", "Remove this LoRA", "apex-row-remove");
+  const remove = iconButton("x", "Remove this LoRA", "apex-row-remove");
   remove.addEventListener("click", () => {
     section.loras.splice(section.loras.indexOf(row), 1);
     commit(node, { presetDirty: true });
@@ -1637,7 +1901,7 @@ function buildSection(node, section) {
   );
   collapse.addEventListener("click", () => {
     section.collapsed = !section.collapsed;
-    commit(node, { presetDirty: false });
+    commit(node, { fullPresetDirty: true });
   });
   const allEnabled = section.loras.length > 0 && enabledCount === section.loras.length;
   const toggleAll = iconButton(
@@ -1660,7 +1924,7 @@ function buildSection(node, section) {
   name.addEventListener("change", () => {
     const currentIndex = node.__apexState.sections.indexOf(section);
     section.name = name.value.trim() || `Section ${currentIndex + 1}`;
-    commit(node, { presetDirty: false });
+    commit(node, { fullPresetDirty: true });
   });
   const count = document.createElement("span");
   count.className = "apex-section-count";
@@ -1704,7 +1968,7 @@ function buildSection(node, section) {
     if (section.collapsed) section.collapsed = false;
     dragPayload = null;
     clearDragFeedback();
-    commit(node, { presetDirty: false });
+    commit(node, { fullPresetDirty: true });
   });
 
   if (!section.collapsed) {
@@ -1760,7 +2024,7 @@ function sectionDropTarget(node, lane, clientY) {
 function addSectionToColumn(node, column) {
   const section = createSection(`Section ${node.__apexState.sections.length + 1}`, column);
   addSectionToState(node.__apexState, section, column);
-  commit(node, { presetDirty: false });
+  commit(node, { fullPresetDirty: true });
 }
 
 
@@ -1833,7 +2097,7 @@ function createSectionLane(node, column) {
     );
     dragPayload = null;
     clearDragFeedback();
-    commit(node, { presetDirty: false });
+    commit(node, { fullPresetDirty: true });
   });
   return lane;
 }

@@ -7,7 +7,7 @@
 Organize, filter, reorder, preset, recover, and annotate large LoRA stacks in one compact node.
 
 [![License: MIT][license-shield]][license-link]
-[![Version: v0.2][version-shield]][version-link]
+[![Version: v0.3][version-shield]][version-link]
 [![ComfyUI Custom Node][comfyui-shield]][comfyui-link]
 [![Local only][local-shield]][local-link]
 [![No extra packages][dependencies-shield]][dependencies-link]
@@ -25,7 +25,7 @@ Organize, filter, reorder, preset, recover, and annotate large LoRA stacks in on
 
 ## Overview
 
-Apex LoRA Loader provides MODEL-only LoRA patching with an optional prompt passthrough. It combines an ordered LoRA stack, responsive named sections, per-node folder filtering, global presets, rename-safe file identities, and manually curated trigger words.
+Apex LoRA Loader provides MODEL-only LoRA patching with an optional prompt passthrough. It combines an ordered LoRA stack, responsive named sections, per-node folder filtering, active-state and full-setup presets, rename-safe file identities, and manually curated trigger words.
 
 | Port | Direction | Purpose |
 | --- | --- | --- |
@@ -46,7 +46,7 @@ The node intentionally has no CLIP socket. LoRAs are applied to `MODEL` with zer
 - A polished dark interface with split toolbar islands, responsive stack metrics, and a subtle blue-teal fog surface.
 - Recursive per-node folder filters with All, None, Root, and multi-folder selection.
 - Confirmed **Add all LoRAs** action for the current filtered library.
-- Installation-wide presets that restore enabled states and strengths without replacing the current stack.
+- Installation-wide presets for either active LoRA states or complete node setups, with direct inline management from the custom preset menu.
 - SHA-256 identities that recover LoRAs after file or folder renames.
 - Multiple active trigger words per LoRA with per-row prepend or append placement.
 - Two-decimal strengths and configurable horizontal drag increments.
@@ -105,11 +105,12 @@ Strengths are clamped to `-100..100` and stored with at most two decimal places.
 
 ### Smart global presets
 
-Presets are shared by every Apex node and workflow in the same ComfyUI installation. They store only enabled LoRA identities and their strengths.
+Presets are shared by every Apex node and workflow in the same ComfyUI installation. The save dialog offers two preset types, kept in separate groups in the custom toolbar menu:
 
-Applying a preset disables current rows, matches saved identities to rows already in the stack, then restores matching enabled states and strengths. SHA-256 is preferred, with exact-name fallback for entries without a usable hash. Duplicate LoRAs match one-to-one in current row order.
+- **Active LoRAs** stores only enabled LoRA identities and strengths. Applying one disables current rows, matches saved identities to rows already in the stack, and restores the matching states without changing sections, rows, or ordering.
+- **Full setup** stores folder filters, node settings, sections, columns, collapse states, every LoRA row and its order, enabled states, strengths, and trigger-word configuration. Applying one first warns that the current setup will be replaced.
 
-Presets never replace sections, rows, ordering, folder filters, or trigger-word configuration. Missing entries are reported but not added. Empty presets are valid, and saved presets can be overwritten, renamed, or deleted.
+Active LoRA matching prefers SHA-256, with exact-name fallback for entries without a usable hash. Duplicate LoRAs match one-to-one in current row order, missing entries are reported but never added, and empty presets are valid. Both preset types can be overwritten, renamed inline, or deleted directly from the menu without first applying them.
 
 ### Rename-safe identities
 
@@ -177,7 +178,7 @@ No `pip install` or `npm install` step is required.
 4. Enable rows and set their strengths.
 5. Drag rows or sections into the desired application order.
 6. Optionally connect a prompt and enable trigger-word controls in Settings.
-7. Save useful combinations as global presets.
+7. Save useful combinations as an Active LoRA preset, or preserve the complete node as a Full setup preset.
 
 Enabled, nonzero-strength rows are applied down each section and column, proceeding through columns from left to right. Disabled and zero-strength rows are skipped.
 
@@ -202,7 +203,7 @@ An enabled row that cannot be resolved fails clearly instead of silently loading
 | Data | Scope | Storage |
 | --- | --- | --- |
 | Sections, rows, order, filters, settings, and trigger placement | Per node/workflow | Hidden versioned JSON serialized by ComfyUI |
-| Presets | Installation-wide | `ComfyUI/user/__apex_lora_loader/presets.json` by default |
+| Active LoRA and full setup presets | Installation-wide | `ComfyUI/user/__apex_lora_loader/presets.json` by default |
 | Hashes and trigger-word metadata | Installation-wide | `ComfyUI/user/__apex_lora_loader/lora_metadata.json` by default |
 | Loaded LoRA tensors | Current execution only | Memory |
 
@@ -233,7 +234,7 @@ Embedded Lucide icons retain their ISC terms, and Feather-derived Lucide icons r
 
 [license-shield]: https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square
 [license-link]: LICENSE
-[version-shield]: https://img.shields.io/badge/version-v0.2-1f6feb?style=flat-square
+[version-shield]: https://img.shields.io/badge/version-v0.3-1f6feb?style=flat-square
 [version-link]: https://github.com/lericogit/apex-lora-loader/releases
 [comfyui-shield]: https://img.shields.io/badge/ComfyUI-custom_node-6f42c1?style=flat-square
 [comfyui-link]: https://github.com/Comfy-Org/ComfyUI

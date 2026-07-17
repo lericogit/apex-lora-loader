@@ -162,9 +162,9 @@
   box-shadow: 0 5px 14px rgba(0, 0, 0, .16);
 }
 .apex-toolbar-presets {
-  width: calc(var(--apex-preset-max-width) + 70px);
-  max-width: calc(var(--apex-preset-max-width) + 70px);
-  flex: 0 1 calc(var(--apex-preset-max-width) + 70px);
+  width: calc(var(--apex-preset-max-width) + 38px);
+  max-width: calc(var(--apex-preset-max-width) + 38px);
+  flex: 0 1 calc(var(--apex-preset-max-width) + 38px);
 }
 .apex-toolbar-info {
   display: none;
@@ -197,21 +197,29 @@
 .apex-toolbar-utilities {
   flex: none;
 }
-.apex-toolbar select {
-  width: 100%;
+.apex-preset-select {
+  display: flex;
+  width: auto;
   min-width: 0;
-  padding: 3px 25px 3px 8px;
+  max-width: var(--apex-preset-max-width);
+  padding: 3px 6px 3px 8px;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+  flex: 1 1 auto;
   border-color: rgba(255, 255, 255, .11);
   background-color: var(--apex-input-strong);
   color: var(--apex-text-soft);
   font-size: 11px;
 }
-.apex-toolbar-presets select {
-  width: auto;
-  min-width: 80px;
-  max-width: var(--apex-preset-max-width);
-  flex: 1 1 auto;
+.apex-preset-select:hover { border-color: rgba(119, 213, 220, .32); background: var(--apex-raised); }
+.apex-preset-select span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+.apex-preset-select svg { width: 13px; height: 13px; flex: none; color: var(--apex-text-dim); }
 .apex-tool {
   min-width: 28px;
   padding: 2px 7px;
@@ -584,7 +592,7 @@
 }
 .apex-row .apex-icon:hover { background: rgba(255, 255, 255, .055); color: var(--apex-primary); }
 .apex-row .apex-icon svg { width: 14px; height: 14px; }
-.apex-row .lucide-trash-2 { width: 13px; height: 13px; }
+.apex-row .lucide-x { width: 13px; height: 13px; }
 .apex-row-drag {
   display: flex;
   align-items: center;
@@ -731,7 +739,8 @@
   font: 12px/1.4 var(--apex-body-font);
   user-select: none;
 }
-.apex-popover.apex-preset-manager { width: min(280px, calc(100vw - 16px)); }
+.apex-popover.apex-preset-dropdown { width: min(390px, calc(100vw - 16px)); }
+.apex-popover.apex-preset-save { width: min(380px, calc(100vw - 16px)); }
 .apex-popover.apex-settings-popover { width: min(310px, calc(100vw - 16px)); }
 .apex-popover.apex-trigger-popover { width: min(330px, calc(100vw - 16px)); }
 .apex-popover-header {
@@ -781,6 +790,194 @@
   color: var(--apex-error-soft) !important;
 }
 .apex-danger-action:hover { border-color: var(--apex-error) !important; background: rgba(147, 0, 10, .25) !important; }
+
+.apex-preset-name-field {
+  display: grid;
+  gap: 4px;
+  color: var(--apex-text-dim);
+  font-size: 10px;
+  letter-spacing: .02em;
+}
+.apex-preset-name-field input {
+  width: 100%;
+  padding: 4px 8px;
+  background: var(--apex-input-strong);
+  color: var(--apex-text);
+  font-size: 12px;
+}
+.apex-preset-type-label {
+  color: var(--apex-text-dim);
+  font-size: 10px;
+  letter-spacing: .02em;
+}
+.apex-preset-types {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.apex-popover .apex-preset-type {
+  display: flex;
+  min-height: 86px;
+  padding: 9px;
+  gap: 5px;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  border-color: rgba(255, 255, 255, .1);
+  border-radius: 7px;
+  background: rgba(27, 33, 41, .75);
+}
+.apex-preset-type strong {
+  color: var(--apex-text-soft);
+  font: 600 12px/1.2 var(--apex-heading-font);
+}
+.apex-preset-type span {
+  color: var(--apex-text-dim);
+  font-size: 10px;
+  line-height: 1.35;
+}
+.apex-popover .apex-preset-type.active {
+  border-color: rgba(119, 213, 220, .62);
+  background: linear-gradient(145deg, rgba(68, 166, 173, .22), rgba(39, 77, 86, .16));
+  box-shadow: inset 0 0 0 1px rgba(68, 166, 173, .12), 0 0 12px rgba(68, 166, 173, .08);
+}
+.apex-preset-type.active strong { color: var(--apex-primary-bright); }
+.apex-preset-type.active span { color: var(--apex-text-soft); }
+
+.apex-preset-menu {
+  display: flex;
+  min-height: 0;
+  padding-right: 2px;
+  gap: 8px;
+  flex-direction: column;
+  overflow-y: auto;
+  scrollbar-color: var(--apex-surface-bright) transparent;
+  scrollbar-width: thin;
+}
+.apex-popover .apex-preset-custom {
+  display: flex;
+  width: 100%;
+  min-height: 29px;
+  padding: 3px 8px;
+  align-items: center;
+  border-color: rgba(255, 255, 255, .1);
+  border-radius: 6px;
+  background: rgba(27, 33, 41, .72);
+  text-align: left;
+}
+.apex-preset-custom span { color: var(--apex-text-soft); font-size: 10px; font-weight: 600; }
+.apex-popover .apex-preset-custom.active {
+  border-color: rgba(119, 213, 220, .46);
+  background: rgba(68, 166, 173, .14);
+  box-shadow: inset 2px 0 var(--apex-accent);
+}
+.apex-preset-custom.active span { color: var(--apex-primary-bright); }
+.apex-preset-menu-group {
+  display: flex;
+  gap: 2px;
+  flex-direction: column;
+}
+.apex-preset-menu-heading {
+  display: flex;
+  min-height: 18px;
+  padding: 0 5px;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--apex-text-dim);
+  font: 600 9px/1 var(--apex-heading-font);
+  letter-spacing: .075em;
+  text-transform: uppercase;
+}
+.apex-preset-menu-heading small {
+  min-width: 18px;
+  padding: 2px 5px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .055);
+  color: var(--apex-text-dim);
+  font: 600 9px/1 var(--apex-code-font);
+  text-align: center;
+}
+.apex-preset-menu-row {
+  display: grid;
+  min-width: 0;
+  padding: 1px;
+  grid-template-columns: minmax(0, 1fr) 24px 24px;
+  gap: 1px;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: rgba(27, 33, 41, .56);
+  transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+}
+.apex-preset-menu-row:hover {
+  border-color: rgba(255, 255, 255, .1);
+  background: rgba(38, 42, 49, .82);
+}
+.apex-preset-menu-row.active {
+  border-color: rgba(68, 166, 173, .34);
+  background: linear-gradient(90deg, rgba(68, 166, 173, .16), rgba(27, 33, 41, .66));
+  box-shadow: inset 2px 0 var(--apex-accent);
+}
+.apex-popover .apex-preset-menu-apply {
+  display: flex;
+  min-width: 0;
+  min-height: 25px;
+  padding: 2px 6px;
+  align-items: center;
+  border-color: transparent;
+  background: transparent;
+  text-align: left;
+}
+.apex-popover .apex-preset-menu-apply:hover { border-color: transparent; background: rgba(255, 255, 255, .035); }
+.apex-preset-menu-apply span {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--apex-text-soft);
+  font-size: 10px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.apex-preset-menu-row.active .apex-preset-menu-apply span { color: var(--apex-primary-bright); }
+.apex-popover .apex-preset-row-action {
+  width: 24px;
+  min-width: 24px !important;
+  min-height: 24px;
+  padding: 2px !important;
+  border-color: transparent;
+  background: transparent;
+  color: var(--apex-text-dim);
+}
+.apex-popover .apex-preset-row-action svg { width: 11px; height: 11px; }
+.apex-popover .apex-preset-rename:hover,
+.apex-popover .apex-preset-rename.active {
+  border-color: rgba(119, 213, 220, .28);
+  background: rgba(68, 166, 173, .14);
+  color: var(--apex-primary);
+}
+.apex-popover .apex-preset-delete:hover {
+  border-color: rgba(240, 113, 112, .32);
+  background: rgba(147, 0, 10, .18);
+  color: var(--apex-error-soft);
+}
+.apex-popover .apex-preset-rename-input {
+  width: 100%;
+  min-width: 0;
+  min-height: 25px;
+  padding: 2px 6px;
+  border-color: var(--apex-accent);
+  background: var(--apex-input-strong);
+  color: var(--apex-text);
+  font-size: 10px;
+}
+.apex-preset-menu-empty {
+  padding: 14px 8px;
+  border: 1px dashed rgba(135, 147, 148, .22);
+  border-radius: 6px;
+  color: var(--apex-text-dim);
+  font-size: 10px;
+  text-align: center;
+}
 
 .apex-chooser-tools {
   display: grid;

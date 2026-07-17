@@ -386,6 +386,177 @@ class BackendTests(unittest.TestCase):
             self.assertEqual([item["name"] for item in store.read()["presets"]], ["Empty"])
             self.assertFalse(list(tmp_path.glob("*.tmp")))
 
+    def test_preset_store_migrates_v1_and_missing_types_to_active(self):
+        preset_id = "00000000-0000-4000-8000-000000000001"
+        legacy_preset = {
+            "id": preset_id,
+            "name": "Legacy",
+            "entries": [{
+                "name": "A.safetensors",
+                "sha256": "a" * 64,
+                "size": 3,
+                "strength": 0.8,
+            }],
+        }
+        for version in (1, 2):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "presets.json"
+                path.write_text(json.dumps({
+                    "version": version,
+                    "presets": [legacy_preset],
+                }), encoding="utf-8")
+
+                data = services.PresetStore(str(path)).read()
+
+                self.assertEqual(data["version"], 2)
+                self.assertEqual(data["presets"], [{
+                    **legacy_preset,
+                    "type": "active",
+                }])
+
+    def test_full_preset_roundtrip_preserves_order_and_strips_transient_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tmp_path = Path(directory)
+            store = services.PresetStore(str(tmp_path / "presets.json"))
+            saved = store.upsert({
+                "name": "Complete setup",
+                "type": "full",
+                "state": {
+                    "version": 1,
+                    "folder_filters": ["styles", ""],
+                    "active_preset_id": "do-not-save",
+                    "unknown": "discard",
+                    "settings": {
+                        "show_safetensors": False,
+                        "show_folder_paths": True,
+                        "show_trigger_button": True,
+                        "strength_drag_step": 0.057,
+                        "unknown": "discard",
+                    },
+                    "sections": [
+                        {
+                            "id": "section-two",
+                            "name": "Second",
+                            "collapsed": True,
+                            "column": 1,
+                            "unknown": "discard",
+                            "loras": [
+                                {
+                                    "id": "row-b",
+                                    "name": "folder/B.safetensors",
+                                    "enabled": False,
+                                    "strength": -0.5733,
+                                    "sha256": "b" * 64,
+                                    "size": 20,
+                                    "trigger_words": [" portrait ", "detail", "portrait"],
+                                    "active_trigger_words": [" detail "],
+                                    "trigger_position": "prepend",
+                                    "error": "missing",
+                                    "unknown": "discard",
+                                },
+                                {
+                                    "id": "row-a",
+                                    "name": "folder/A.safetensors",
+                                    "enabled": True,
+                                    "strength": 0.456,
+                                    "sha256": "a" * 64,
+                                    "size": 10,
+                                    "trigger_words": [],
+                                    "active_trigger_words": [],
+                                    "trigger_position": "append",
+                                },
+                            ],
+                        },
+                        {
+                            "id": "section-one",
+                            "name": "First",
+                            "collapsed": False,
+                            "column": 0,
+                            "loras": [],
+                        },
+                    ],
+                },
+            })
+
+            self.assertEqual(saved["type"], "full")
+            self.assertEqual(saved["state"]["settings"]["strength_drag_step"], 0.06)
+            self.assertEqual(
+                [section["id"] for section in saved["state"]["sections"]],
+                ["section-two", "section-one"],
+            )
+            self.assertEqual(
+                [entry["id"] for entry in saved["state"]["sections"][0]["loras"]],
+                ["row-b", "row-a"],
+            )
+            self.assertEqual(
+                [entry["strength"] for entry in saved["state"]["sections"][0]["loras"]],
+                [-0.57, 0.46],
+            )
+            self.assertEqual(
+                saved["state"]["sections"][0]["loras"][0]["trigger_words"],
+                ["portrait", "detail"],
+            )
+            self.assertEqual(
+                saved["state"]["sections"][0]["loras"][0]["active_trigger_words"],
+                ["detail"],
+            )
+            serialized = json.dumps(saved)
+            self.assertNotIn("active_preset_id", serialized)
+            self.assertNotIn("unknown", serialized)
+            self.assertNotIn("missing", serialized)
+            self.assertEqual(store.read()["presets"], [saved])
+            self.assertEqual(json.loads((tmp_path / "presets.json").read_text(encoding="utf-8"))["version"], 2)
+            self.assertFalse(list(tmp_path.glob("*.tmp")))
+
+    def test_preset_store_rejects_invalid_type_and_payload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = services.PresetStore(str(Path(directory) / "presets.json"))
+            invalid_presets = [
+                {"name": "Bad", "type": "unknown", "entries": []},
+                {"name": "Bad", "type": "active", "state": {"version": 1, "sections": []}},
+                {"name": "Bad", "type": "full", "entries": []},
+                {
+                    "name": "Bad",
+                    "type": "full",
+                    "state": {"version": 1, "folder_filters": None, "settings": {}, "sections": "bad"},
+                },
+            ]
+            for preset in invalid_presets:
+                with self.subTest(preset=preset), self.assertRaises(ValueError):
+                    store.upsert(preset)
+
+    def test_renaming_full_preset_preserves_type_and_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = services.PresetStore(str(Path(directory) / "presets.json"))
+            saved = store.upsert({
+                "name": "Before",
+                "type": "full",
+                "state": {
+                    "version": 1,
+                    "folder_filters": None,
+                    "settings": {
+                        "show_safetensors": True,
+                        "show_folder_paths": True,
+                        "show_trigger_button": False,
+                        "strength_drag_step": 0.01,
+                    },
+                    "sections": [{
+                        "id": "section",
+                        "name": "Saved",
+                        "collapsed": False,
+                        "column": 0,
+                        "loras": [],
+                    }],
+                },
+            })
+
+            renamed = store.rename(saved["id"], "After")
+
+            self.assertEqual(renamed["name"], "After")
+            self.assertEqual(renamed["type"], "full")
+            self.assertEqual(renamed["state"], saved["state"])
+            self.assertEqual(store.read()["presets"], [renamed])
+
     def test_metadata_store_keys_trigger_words_by_hash(self):
         with tempfile.TemporaryDirectory() as directory:
             tmp_path = Path(directory)

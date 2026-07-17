@@ -383,6 +383,35 @@ export function presetEntriesFromState(state) {
     }));
 }
 
+export function presetType(preset) {
+  return preset?.type === "full" ? "full" : "active";
+}
+
+export function fullPresetStateFromState(state) {
+  const snapshot = JSON.parse(serializeState(normalizeState(state)));
+  delete snapshot.active_preset_id;
+  return snapshot;
+}
+
+export function applyFullPreset(state, preset) {
+  if (presetType(preset) !== "full" || preset?.state?.version !== STATE_VERSION || !Array.isArray(preset.state.sections)) {
+    throw new Error("Full preset state has an unsupported format.");
+  }
+  const replacement = normalizeState({
+    ...preset.state,
+    active_preset_id: preset.id,
+  });
+  state.version = replacement.version;
+  state.folder_filters = replacement.folder_filters;
+  state.settings = replacement.settings;
+  state.sections = replacement.sections;
+  state.active_preset_id = preset.id;
+  return {
+    sections: state.sections.length,
+    loras: allRows(state).length,
+  };
+}
+
 export function applyPreset(state, preset) {
   const rows = allRows(state);
   const used = new Set();

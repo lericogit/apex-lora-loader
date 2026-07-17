@@ -12,6 +12,7 @@ import folder_paths
 
 HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 METADATA_VERSION = 3
+PRESET_VERSION = 2
 TRIGGER_WORD_MAX_LENGTH = 2000
 
 
@@ -380,12 +381,18 @@ class PresetStore:
 
     def _read_unlocked(self):
         if not os.path.isfile(self.path):
-            return {"version": 1, "presets": []}
+            return {"version": PRESET_VERSION, "presets": []}
         with open(self.path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
-        if not isinstance(data, dict) or data.get("version") != 1 or not isinstance(data.get("presets"), list):
+        if (
+            not isinstance(data, dict)
+            or data.get("version") not in (1, PRESET_VERSION)
+            or not isinstance(data.get("presets"), list)
+        ):
             raise ValueError("Apex LoRA preset file has an unsupported format.")
-        return data
+        presets = [self._validate_preset(preset) for preset in data["presets"]]
+        presets.sort(key=lambda item: (item["name"].casefold(), item["name"]))
+        return {"version": PRESET_VERSION, "presets": presets}
 
     def read(self):
         with self._lock:
@@ -408,6 +415,18 @@ class PresetStore:
         name = name.strip()
         if len(name) > 100:
             raise ValueError("Preset name cannot exceed 100 characters.")
+
+        preset_type = preset.get("type", "active")
+        if preset_type not in ("active", "full"):
+            raise ValueError("Preset type must be active or full.")
+        if preset_type == "full":
+            return {
+                "id": preset_id,
+                "name": name,
+                "type": preset_type,
+                "state": self._validate_full_state(preset.get("state")),
+            }
+
         entries = preset.get("entries")
         if not isinstance(entries, list) or len(entries) > 2048:
             raise ValueError("Preset entries must be a list of at most 2048 items.")
@@ -431,7 +450,132 @@ class PresetStore:
                 "size": size,
                 "strength": strength,
             })
-        return {"id": preset_id, "name": name, "entries": clean_entries}
+        return {
+            "id": preset_id,
+            "name": name,
+            "type": preset_type,
+            "entries": clean_entries,
+        }
+
+    def _validate_full_state(self, state):
+        if not isinstance(state, dict) or state.get("version") != 1:
+            raise ValueError("Full preset state has an unsupported format.")
+
+        folder_filters = state.get("folder_filters")
+        if folder_filters is not None:
+            if not isinstance(folder_filters, list) or len(folder_filters) > 256:
+                raise ValueError("Full preset folder filters must be null or an array of at most 256 folders.")
+            clean_filters = []
+            for folder in folder_filters:
+                if not isinstance(folder, str):
+                    raise ValueError("Full preset folder filters must be strings.")
+                folder = folder.replace("\\", "/")
+                if folder not in clean_filters:
+                    clean_filters.append(folder)
+            folder_filters = clean_filters
+
+        settings = state.get("settings", {})
+        if not isinstance(settings, dict):
+            raise ValueError("Full preset settings must be an object.")
+        drag_step = settings.get("strength_drag_step", 0.01)
+        if isinstance(drag_step, bool) or not isinstance(drag_step, (int, float)):
+            raise ValueError("Full preset strength drag step must be numeric.")
+        drag_step = float(drag_step)
+        if not math.isfinite(drag_step) or drag_step < 0.01 or drag_step > 100:
+            raise ValueError("Full preset strength drag step must be between 0.01 and 100.")
+        clean_settings = {
+            "show_safetensors": settings.get("show_safetensors") is not False,
+            "show_folder_paths": settings.get("show_folder_paths") is not False,
+            "show_trigger_button": settings.get("show_trigger_button") is True,
+            "strength_drag_step": round(drag_step, 2),
+        }
+
+        sections = state.get("sections")
+        if not isinstance(sections, list) or not sections or len(sections) > 256:
+            raise ValueError("Full preset sections must be a list of 1 to 256 items.")
+        clean_sections = []
+        section_ids = set()
+        row_ids = set()
+        row_count = 0
+        for section_index, section in enumerate(sections):
+            if not isinstance(section, dict):
+                raise ValueError("Full preset sections must be objects.")
+            section_id = self._validate_item_id(section.get("id"), "Section", section_ids)
+            section_name = section.get("name")
+            if not isinstance(section_name, str) or not section_name.strip():
+                raise ValueError(f"Full preset section {section_index + 1} must have a name.")
+            section_name = section_name.strip()
+            if len(section_name) > 200:
+                raise ValueError("Full preset section names cannot exceed 200 characters.")
+            collapsed = section.get("collapsed")
+            if not isinstance(collapsed, bool):
+                raise ValueError(f"Collapsed state for section '{section_name}' must be true or false.")
+            column = section.get("column")
+            if column is not None and (
+                isinstance(column, bool) or not isinstance(column, int) or column < 0
+            ):
+                raise ValueError(f"Column for section '{section_name}' must be null or a non-negative integer.")
+            loras = section.get("loras")
+            if not isinstance(loras, list):
+                raise ValueError(f"Section '{section_name}' must contain a LoRA list.")
+            row_count += len(loras)
+            if row_count > 2048:
+                raise ValueError("Full preset state cannot contain more than 2048 LoRAs.")
+            clean_loras = [self._validate_full_row(row, row_ids) for row in loras]
+            clean_sections.append({
+                "id": section_id,
+                "name": section_name,
+                "collapsed": collapsed,
+                "column": column,
+                "loras": clean_loras,
+            })
+
+        return {
+            "version": 1,
+            "folder_filters": folder_filters,
+            "settings": clean_settings,
+            "sections": clean_sections,
+        }
+
+    @staticmethod
+    def _validate_item_id(value, label, used):
+        if not isinstance(value, str) or not value.strip() or len(value) > 200:
+            raise ValueError(f"{label} id must be a non-empty string of at most 200 characters.")
+        if value in used:
+            raise ValueError(f"{label} ids must be unique within a full preset.")
+        used.add(value)
+        return value
+
+    def _validate_full_row(self, row, row_ids):
+        if not isinstance(row, dict):
+            raise ValueError("Full preset LoRA rows must be objects.")
+        row_id = self._validate_item_id(row.get("id"), "LoRA row", row_ids)
+        name = normalize_lora_name(row.get("name"))
+        enabled = row.get("enabled")
+        if not isinstance(enabled, bool):
+            raise ValueError(f"Enabled state for '{name}' must be true or false.")
+        strength = row.get("strength")
+        if isinstance(strength, bool) or not isinstance(strength, (int, float)):
+            raise ValueError(f"Preset strength for '{name}' must be numeric.")
+        strength = float(strength)
+        if not math.isfinite(strength) or strength < -100 or strength > 100:
+            raise ValueError(f"Preset strength for '{name}' must be between -100 and 100.")
+        digest, size = validate_identity(row)
+        trigger_words, active_trigger_words = normalize_trigger_metadata(row)
+        trigger_position = row.get("trigger_position", "append")
+        if trigger_position not in ("prepend", "append"):
+            raise ValueError(f"Trigger position for '{name}' must be prepend or append.")
+        return {
+            "id": row_id,
+            "name": name,
+            "enabled": enabled,
+            "strength": round(strength, 2),
+            "sha256": digest,
+            "size": size,
+            "trigger_words": trigger_words,
+            "active_trigger_words": active_trigger_words,
+            "trigger_position": trigger_position,
+        }
 
     def upsert(self, preset):
         clean = self._validate_preset(preset)
