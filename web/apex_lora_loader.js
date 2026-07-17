@@ -2214,7 +2214,7 @@ function buildNodeUI(node) {
   const domWidget = node.addDOMWidget("apex_lora_ui", "apex-lora-ui", root, {
     serialize: false,
     hideOnZoom: false,
-    margin: 0,
+    margin: 3,
     getMinHeight: () => 190,
     afterResize: () => scheduleSectionLayout(node),
   });

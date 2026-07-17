@@ -49,7 +49,7 @@
     radial-gradient(ellipse 68% 58% at 103% 17%, rgba(38, 93, 151, .2) 0%, rgba(28, 69, 112, .07) 47%, transparent 74%),
     radial-gradient(ellipse 78% 52% at 42% 108%, rgba(45, 133, 142, .17) 0%, rgba(31, 91, 105, .06) 48%, transparent 76%),
     radial-gradient(ellipse 54% 42% at 52% 42%, rgba(48, 78, 112, .09) 0%, transparent 74%),
-    linear-gradient(145deg, #101820 0%, #111a24 45%, #0b1118 100%);
+    linear-gradient(145deg, #101820 0%, #111a24 45%, #1b2834 100%);
   color: var(--apex-text);
   font: 12px/1.35 var(--apex-body-font);
   overflow: hidden;
