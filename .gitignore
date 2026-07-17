@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Node and build output
+node_modules/
+dist/
+build/
+
+# Local environment and tools
+.env
+.env.*
+.venv/
+venv/
+.agents/
+.codex/
+.idea/
+.vscode/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*~
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
