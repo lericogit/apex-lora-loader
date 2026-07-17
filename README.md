@@ -7,7 +7,7 @@
 Organize, filter, reorder, preset, recover, and annotate large LoRA stacks in one compact node.
 
 [![License: MIT][license-shield]][license-link]
-[![Version: v0.3][version-shield]][version-link]
+[![Version: v0.3.1][version-shield]][version-link]
 [![ComfyUI Custom Node][comfyui-shield]][comfyui-link]
 [![Local only][local-shield]][local-link]
 [![No extra packages][dependencies-shield]][dependencies-link]
@@ -98,6 +98,10 @@ Existing rows keep loading even if their folders are later excluded from the cho
 ### Strength control
 
 Strengths are clamped to `-100..100` and stored with at most two decimal places.
+
+Displayed values always use a fixed comma-decimal format such as `1,00`, `1,50`, or `-0,57`. Manual entry accepts either a comma or period as the decimal separator.
+
+The strength field visualizes the decimal portion as a continuous fill and the whole-number magnitude as a second ten-block layer. Positive and negative values use mirrored directions and separate colors; the block layer caps at ten while larger values retain their fractional fill.
 
 - Click and type an exact value.
 - Hold the left mouse button and drag horizontally.
@@ -234,7 +238,7 @@ Embedded Lucide icons retain their ISC terms, and Feather-derived Lucide icons r
 
 [license-shield]: https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square
 [license-link]: LICENSE
-[version-shield]: https://img.shields.io/badge/version-v0.3-1f6feb?style=flat-square
+[version-shield]: https://img.shields.io/badge/version-v0.3.1-1f6feb?style=flat-square
 [version-link]: https://github.com/lericogit/apex-lora-loader/releases
 [comfyui-shield]: https://img.shields.io/badge/ComfyUI-custom_node-6f42c1?style=flat-square
 [comfyui-link]: https://github.com/Comfy-Org/ComfyUI

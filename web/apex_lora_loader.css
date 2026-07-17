@@ -659,28 +659,35 @@
 .apex-row.error .apex-lora-name { color: var(--apex-error); }
 
 .apex-strength {
+  --apex-strength-direction: to right;
+  --apex-strength-color: rgba(49, 159, 165, .2);
+  --apex-strength-block-color: rgba(89, 211, 218, .52);
   width: 60px;
   padding: 0 5px;
   border: 0 !important;
   border-left: 1px solid var(--apex-border) !important;
   border-radius: 0 !important;
   background:
-    linear-gradient(to right, rgba(49, 159, 165, .2) 0 var(--apex-strength-fill, 0%), transparent var(--apex-strength-fill, 0%) 100%),
+    linear-gradient(var(--apex-strength-direction), var(--apex-strength-color) 0 var(--apex-strength-fill, 0%), transparent var(--apex-strength-fill, 0%) 100%),
     transparent !important;
   color: var(--apex-primary);
   font: 500 11px/14px var(--apex-code-font) !important;
   text-align: center;
   cursor: ew-resize;
-  appearance: textfield;
-  -moz-appearance: textfield;
 }
-.apex-strength::-webkit-inner-spin-button,
-.apex-strength::-webkit-outer-spin-button { margin: 0; -webkit-appearance: none; }
-.apex-strength:hover { background-color: rgba(255, 255, 255, .04) !important; }
-.apex-strength.negative {
+.apex-strength.layered {
   background:
-    linear-gradient(to left, rgba(240, 113, 112, .17) 0 var(--apex-strength-fill, 0%), transparent var(--apex-strength-fill, 0%) 100%),
+    linear-gradient(var(--apex-strength-direction), var(--apex-strength-block-color) 0 var(--apex-strength-block-fill), transparent var(--apex-strength-block-fill) 100%) left bottom / 100% 4px no-repeat,
+    linear-gradient(var(--apex-strength-direction), var(--apex-strength-color) 0 var(--apex-strength-fill, 0%), transparent var(--apex-strength-fill, 0%) 100%),
     transparent !important;
+}
+.apex-strength:hover { background-color: rgba(255, 255, 255, .04) !important; }
+.apex-strength.scrubbing { caret-color: transparent; user-select: none; }
+.apex-strength.scrubbing::selection { background: transparent; color: inherit; }
+.apex-strength.negative {
+  --apex-strength-direction: to left;
+  --apex-strength-color: rgba(240, 113, 112, .17);
+  --apex-strength-block-color: rgba(255, 144, 125, .48);
   color: var(--apex-error-soft);
 }
 .apex-strength:focus,

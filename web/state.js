@@ -18,6 +18,17 @@ export function normalizeStrength(value, fallback = 1) {
   return Math.max(-100, Math.min(100, roundToTwo(strength)));
 }
 
+export function formatStrength(value) {
+  return normalizeStrength(value, 0).toFixed(2).replace(".", ",");
+}
+
+export function parseStrengthInput(value) {
+  const normalized = String(value).trim().replace(",", ".");
+  if (!normalized) return null;
+  const strength = Number(normalized);
+  return Number.isFinite(strength) ? normalizeStrength(strength) : null;
+}
+
 export function normalizeTriggerMetadata(value = {}) {
   const source = Array.isArray(value?.trigger_words)
     ? value.trigger_words
@@ -247,6 +258,17 @@ export function strengthFromDrag(startValue, deltaX, step = DEFAULT_SETTINGS.str
   const stepUnits = Math.round(normalizeDragStep(step) * 100);
   const valueUnits = Math.max(-10000, Math.min(10000, startUnits + ticks * stepUnits));
   return valueUnits / 100;
+}
+
+export function strengthFillParts(value) {
+  const strength = normalizeStrength(value, 0);
+  const magnitude = Math.abs(strength);
+  const whole = Math.floor(magnitude);
+  return {
+    negative: strength < 0,
+    fraction: roundToTwo((magnitude - whole) * 100),
+    blocks: Math.min(10, whole),
+  };
 }
 
 export function responsiveColumnCount(width, sectionCount, minimum = 320, gap = 6) {

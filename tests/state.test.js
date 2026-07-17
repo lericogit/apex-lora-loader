@@ -8,6 +8,7 @@ import {
   applyFullPreset,
   applyPreset,
   createSection,
+  formatStrength,
   insertionIndexFromMidpoints,
   fullPresetStateFromState,
   matchesFolderFilters,
@@ -17,10 +18,12 @@ import {
   normalizeStrength,
   normalizeTriggerMetadata,
   normalizeTriggerPosition,
+  parseStrengthInput,
   removeTriggerWord,
   responsiveColumnCount,
   sectionsByVisibleColumn,
   serializeState,
+  strengthFillParts,
   strengthFromDrag,
   toggleSectionRows,
   toggleTriggerWord,
@@ -69,6 +72,31 @@ test("horizontal strength dragging is precise and clamped", () => {
   assert.equal(strengthFromDrag(-99.9, -300), -100);
   assert.equal(normalizeStrength(3.457475457), 3.46);
   assert.equal(normalizeStrength(-0.5733), -0.57);
+});
+
+
+test("strength text uses fixed comma decimals and accepts either decimal separator", () => {
+  assert.equal(formatStrength(1), "1,00");
+  assert.equal(formatStrength(1.5), "1,50");
+  assert.equal(formatStrength(-0.5733), "-0,57");
+  assert.equal(formatStrength(100), "100,00");
+  assert.equal(parseStrengthInput("1,50"), 1.5);
+  assert.equal(parseStrengthInput("1.50"), 1.5);
+  assert.equal(parseStrengthInput(" -0,5733 "), -0.57);
+  assert.equal(parseStrengthInput("101"), 100);
+  assert.equal(parseStrengthInput(""), null);
+  assert.equal(parseStrengthInput("not a number"), null);
+});
+
+
+test("strength fills split fractional progress from capped whole-number blocks", () => {
+  assert.deepEqual(strengthFillParts(0.7), { negative: false, fraction: 70, blocks: 0 });
+  assert.deepEqual(strengthFillParts(3.7), { negative: false, fraction: 70, blocks: 3 });
+  assert.deepEqual(strengthFillParts(-3.7), { negative: true, fraction: 70, blocks: 3 });
+  assert.deepEqual(strengthFillParts(10.25), { negative: false, fraction: 25, blocks: 10 });
+  assert.deepEqual(strengthFillParts(-12.34), { negative: true, fraction: 34, blocks: 10 });
+  assert.deepEqual(strengthFillParts(100), { negative: false, fraction: 0, blocks: 10 });
+  assert.deepEqual(strengthFillParts("invalid"), { negative: false, fraction: 0, blocks: 0 });
 });
 
 

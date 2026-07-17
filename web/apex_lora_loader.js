@@ -11,16 +11,17 @@ import {
   applyPreset,
   createRow,
   createSection,
+  formatStrength,
   insertionIndexFromMidpoints,
   fullPresetStateFromState,
   matchesFolderFilters,
   moveRow,
   moveSection,
   normalizeSettings,
-  normalizeStrength,
   normalizeState,
   normalizeTriggerMetadata,
   normalizeTriggerPosition,
+  parseStrengthInput,
   presetEntriesFromState,
   presetType,
   responsiveColumnCount,
@@ -28,6 +29,7 @@ import {
   sectionsByVisibleColumn,
   serializeState,
   removeTriggerWord,
+  strengthFillParts,
   toggleTriggerWord,
   strengthFromDrag,
   toggleSectionRows,
@@ -1640,14 +1642,16 @@ function installStrengthDrag(node, row, input) {
 
   input.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
-    const value = Number(input.value);
+    event.preventDefault();
+    const value = parseStrengthInput(input.value);
     drag = {
       pointerId: event.pointerId,
       startX: event.clientX,
-      startValue: Number.isFinite(value) ? value : row.strength,
+      startValue: value ?? row.strength,
       ticks: 0,
       moved: false,
     };
+    input.classList.add("scrubbing");
     input.setPointerCapture(event.pointerId);
   });
 
@@ -1666,19 +1670,28 @@ function installStrengthDrag(node, row, input) {
       deltaX,
       node.__apexState.settings.strength_drag_step,
     );
-    input.value = String(row.strength);
+    input.value = formatStrength(row.strength);
     setStrengthFill(input, row.strength);
   });
 
   const finish = (event) => {
     if (!drag || drag.pointerId !== event.pointerId) return;
     const moved = drag.moved;
+    const canceled = event.type === "pointercancel";
     drag = null;
-    input.classList.remove("dragging");
+    if (moved && document.activeElement === input) input.blur();
+    input.classList.remove("dragging", "scrubbing");
     if (input.hasPointerCapture(event.pointerId)) input.releasePointerCapture(event.pointerId);
-    if (!moved) return;
     event.preventDefault();
     ignoreClick = true;
+    if (!moved) {
+      if (!canceled) {
+        input.focus({ preventScroll: true });
+        input.select();
+      }
+      setTimeout(() => { ignoreClick = false; }, 0);
+      return;
+    }
     commit(node, { presetDirty: true, render: false });
     setTimeout(() => {
       ignoreClick = false;
@@ -1696,10 +1709,11 @@ function installStrengthDrag(node, row, input) {
 
 
 function setStrengthFill(input, value) {
-  const strength = Number(value);
-  const fill = Number.isFinite(strength) ? Math.min(100, Math.abs(strength) * 100) : 0;
-  input.classList.toggle("negative", strength < 0);
-  input.style.setProperty("--apex-strength-fill", `${fill}%`);
+  const fill = strengthFillParts(value);
+  input.classList.toggle("negative", fill.negative);
+  input.classList.toggle("layered", fill.blocks > 0);
+  input.style.setProperty("--apex-strength-fill", `${fill.fraction}%`);
+  input.style.setProperty("--apex-strength-block-fill", `${fill.blocks * 10}%`);
 }
 
 
@@ -1816,22 +1830,22 @@ function buildRow(node, section, row) {
 
   const strength = document.createElement("input");
   strength.className = "apex-strength";
-  strength.type = "number";
-  strength.min = "-100";
-  strength.max = "100";
-  strength.step = "0.01";
-  strength.value = String(row.strength);
+  strength.type = "text";
+  strength.inputMode = "decimal";
+  strength.maxLength = 7;
+  strength.value = formatStrength(row.strength);
   setStrengthFill(strength, row.strength);
   strength.title = `Model strength. Drag left or right to adjust by exactly ${node.__apexState.settings.strength_drag_step} per tick; click to type.`;
   strength.addEventListener("change", () => {
-    const value = Number(strength.value);
-    if (!Number.isFinite(value)) {
-      strength.value = String(row.strength);
+    if (strength.classList.contains("scrubbing")) return;
+    const value = parseStrengthInput(strength.value);
+    if (value === null) {
+      strength.value = formatStrength(row.strength);
       setStrengthFill(strength, row.strength);
       return;
     }
-    row.strength = normalizeStrength(value);
-    strength.value = String(row.strength);
+    row.strength = value;
+    strength.value = formatStrength(row.strength);
     setStrengthFill(strength, row.strength);
     commit(node, { presetDirty: true });
   });
