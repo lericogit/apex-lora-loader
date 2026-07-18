@@ -34,6 +34,7 @@
   --apex-scrollbar-balance: 12px;
 
   container-type: inline-size;
+  contain: layout paint style;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -54,6 +55,13 @@
   font: 12px/1.35 var(--apex-body-font);
   overflow: hidden;
   user-select: none;
+}
+
+/* Applied only for the duration of a canvas wheel-zoom gesture. ComfyUI owns
+   the transformed wrapper; this targeted class keeps Apex's large DOM subtree
+   on one temporary composited layer without promoting every DOM widget. */
+.dom-widget.apex-lora-zoom-layer {
+  will-change: transform;
 }
 
 .apex-lora-root button,

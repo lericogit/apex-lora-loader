@@ -7,7 +7,7 @@
 Organize, filter, reorder, preset, recover, and annotate large LoRA stacks in one compact node.
 
 [![License: MIT][license-shield]][license-link]
-[![Version: v0.3.1][version-shield]][version-link]
+[![Version: v0.3.2][version-shield]][version-link]
 [![ComfyUI Custom Node][comfyui-shield]][comfyui-link]
 [![Local only][local-shield]][local-link]
 [![No extra packages][dependencies-shield]][dependencies-link]
@@ -238,7 +238,7 @@ Embedded Lucide icons retain their ISC terms, and Feather-derived Lucide icons r
 
 [license-shield]: https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square
 [license-link]: LICENSE
-[version-shield]: https://img.shields.io/badge/version-v0.3.1-1f6feb?style=flat-square
+[version-shield]: https://img.shields.io/badge/version-v0.3.2-1f6feb?style=flat-square
 [version-link]: https://github.com/lericogit/apex-lora-loader/releases
 [comfyui-shield]: https://img.shields.io/badge/ComfyUI-custom_node-6f42c1?style=flat-square
 [comfyui-link]: https://github.com/Comfy-Org/ComfyUI

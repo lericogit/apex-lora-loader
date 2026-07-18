@@ -41,6 +41,7 @@ const DEFAULT_SIZE = [540, 380];
 const NODE_TITLE_COLOR = "#181c23";
 const NODE_BODY_COLOR = "#0f141a";
 const SECTION_TOGGLE_ICON_STYLE = "chevrons";
+const ZOOM_IDLE_DELAY_MS = 180;
 
 const SECTION_TOGGLE_ICON_SETS = {
   chevrons: { collapsed: "chevronRight", expanded: "chevronDown" },
@@ -52,6 +53,9 @@ let presetsCache = null;
 let metadataCache = null;
 let openPopover = null;
 let dragPayload = null;
+let zoomIdleTimer = null;
+let zoomListenerInstalled = false;
+const apexRoots = new Set();
 
 // Embedded Lucide SVG paths are ISC licensed; Feather-derived paths are MIT licensed.
 // See ../THIRD_PARTY_NOTICES.md.
@@ -213,6 +217,52 @@ function injectStyles() {
   link.href = new URL("./apex_lora_loader.css", import.meta.url).href;
   link.dataset.apexLoraStyles = "true";
   document.head.appendChild(link);
+}
+
+
+function apexWidgetWrapper(root) {
+  if (!root?.isConnected) return null;
+  return root.parentElement?.classList?.contains("dom-widget")
+    ? root.parentElement
+    : root.closest?.(".dom-widget");
+}
+
+
+function setZoomLayerActive(active) {
+  for (const root of apexRoots) {
+    const wrapper = apexWidgetWrapper(root);
+    if (!wrapper) continue;
+    wrapper.classList.toggle("apex-lora-zoom-layer", active);
+  }
+}
+
+
+function handleCanvasWheel(event) {
+  if (!apexRoots.size) return;
+  const canvas = app.canvas?.canvas;
+  if (!canvas || (event.target !== canvas && !canvas.contains(event.target))) return;
+  setZoomLayerActive(true);
+  if (zoomIdleTimer != null) clearTimeout(zoomIdleTimer);
+  zoomIdleTimer = setTimeout(() => {
+    zoomIdleTimer = null;
+    setZoomLayerActive(false);
+  }, ZOOM_IDLE_DELAY_MS);
+}
+
+
+function installZoomPerformanceHandler() {
+  if (zoomListenerInstalled) return;
+  zoomListenerInstalled = true;
+  document.addEventListener("wheel", handleCanvasWheel, { capture: true, passive: true });
+}
+
+
+function uninstallZoomPerformanceHandler() {
+  if (!zoomListenerInstalled || apexRoots.size) return;
+  zoomListenerInstalled = false;
+  document.removeEventListener("wheel", handleCanvasWheel, true);
+  if (zoomIdleTimer != null) clearTimeout(zoomIdleTimer);
+  zoomIdleTimer = null;
 }
 
 
@@ -2168,9 +2218,63 @@ function scheduleSectionLayout(node) {
 }
 
 
+function suspendNodeUI(node) {
+  if (node.__apexUiSuspended || !node.__apexRoot) return;
+  node.__apexUiSuspended = true;
+  node.__apexPendingScrollTop = node.__apexStack?.scrollTop ?? node.__apexPendingScrollTop ?? 0;
+  if (node.__apexLayoutFrame != null) cancelAnimationFrame(node.__apexLayoutFrame);
+  node.__apexLayoutFrame = null;
+  if (dragPayload?.node === node) {
+    dragPayload = null;
+    clearDragFeedback();
+  }
+  closeOpenPopover();
+  node.__apexRoot.replaceChildren();
+  node.__apexStack = null;
+  node.__apexStackContent = null;
+  node.__apexStatusElement = null;
+}
+
+
+function resumeNodeUI(node) {
+  if (!node.__apexUiSuspended || !node.__apexBuilt) return;
+  node.__apexUiSuspended = false;
+  renderNode(node);
+}
+
+
+function installNodeCollapseLifecycle(node) {
+  if (node.__apexCollapseLifecycleInstalled || typeof node.collapse !== "function") return;
+  node.__apexCollapseLifecycleInstalled = true;
+  const collapse = node.collapse;
+  node.collapse = function () {
+    const result = collapse.apply(this, arguments);
+    if (this.collapsed) suspendNodeUI(this);
+    else resumeNodeUI(this);
+    return result;
+  };
+}
+
+
+function installWidgetVisibilityLifecycle(node, domWidget) {
+  if (typeof domWidget?.isVisible !== "function") return;
+  const isVisible = domWidget.isVisible.bind(domWidget);
+  let wasVisible = isVisible();
+  domWidget.isVisible = () => {
+    const visible = isVisible();
+    if (visible !== wasVisible) {
+      wasVisible = visible;
+      if (visible) resumeNodeUI(node);
+      else suspendNodeUI(node);
+    }
+    return visible;
+  };
+}
+
+
 function renderNode(node) {
   const root = node.__apexRoot;
-  if (!root || !node.__apexState) return;
+  if (!root || !node.__apexState || node.__apexUiSuspended) return;
   node.__apexPendingScrollTop = node.__apexStack?.scrollTop || 0;
   root.replaceChildren();
   root.appendChild(buildToolbar(node));
@@ -2201,6 +2305,7 @@ function buildNodeUI(node) {
   if (node.color == null) node.color = NODE_TITLE_COLOR;
   if (node.bgcolor == null) node.bgcolor = NODE_BODY_COLOR;
   injectStyles();
+  installZoomPerformanceHandler();
   const widget = dataWidget(node);
   hideDataWidget(widget);
   node.__apexState = normalizeState(widget?.value);
@@ -2213,14 +2318,20 @@ function buildNodeUI(node) {
   root.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
   const domWidget = node.addDOMWidget("apex_lora_ui", "apex-lora-ui", root, {
     serialize: false,
-    hideOnZoom: false,
     margin: 3,
     getMinHeight: () => 190,
     afterResize: () => scheduleSectionLayout(node),
   });
+  // ComfyUI's DOM widget implementation otherwise performs getComputedStyle(root)
+  // during every expanded canvas redraw, even when getMinHeight is provided.
+  domWidget.computeLayoutSize = () => ({ minHeight: 190, maxHeight: undefined, minWidth: 0 });
   domWidget.serializeValue = () => undefined;
   node.__apexRoot = root;
   node.__apexDomWidget = domWidget;
+  node.__apexUiSuspended = false;
+  apexRoots.add(root);
+  installNodeCollapseLifecycle(node);
+  installWidgetVisibilityLifecycle(node, domWidget);
   node.size = [
     Math.max(node.size?.[0] || 0, DEFAULT_SIZE[0]),
     Math.max(node.size?.[1] || 0, DEFAULT_SIZE[1]),
@@ -2280,7 +2391,9 @@ app.registerExtension({
       this.__apexState = normalizeState(dataWidget(this)?.value);
       const widget = dataWidget(this);
       if (widget) widget.value = serializeState(this.__apexState);
-      renderNode(this);
+      if (this.collapsed) suspendNodeUI(this);
+      else if (this.__apexUiSuspended) resumeNodeUI(this);
+      else renderNode(this);
       setTimeout(() => resolveNodeLoras(this, false), 0);
       return result;
     };
@@ -2291,6 +2404,14 @@ app.registerExtension({
       clearDragFeedback();
       if (this.__apexLayoutFrame != null) cancelAnimationFrame(this.__apexLayoutFrame);
       this.__apexLayoutFrame = null;
+      const wrapper = apexWidgetWrapper(this.__apexRoot);
+      wrapper?.classList.remove("apex-lora-zoom-layer");
+      apexRoots.delete(this.__apexRoot);
+      uninstallZoomPerformanceHandler();
+      this.__apexRoot?.replaceChildren();
+      this.__apexStack = null;
+      this.__apexStackContent = null;
+      this.__apexStatusElement = null;
       this.__apexBuilt = false;
       return originalRemoved?.apply(this, arguments);
     };
