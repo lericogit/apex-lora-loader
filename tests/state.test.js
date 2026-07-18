@@ -91,11 +91,16 @@ test("strength text uses fixed comma decimals and accepts either decimal separat
 
 test("strength fills split fractional progress from capped whole-number blocks", () => {
   assert.deepEqual(strengthFillParts(0.7), { negative: false, fraction: 70, blocks: 0 });
+  assert.deepEqual(strengthFillParts(1), { negative: false, fraction: 100, blocks: 0 });
+  assert.deepEqual(strengthFillParts(1.01), { negative: false, fraction: 1, blocks: 1 });
   assert.deepEqual(strengthFillParts(3.7), { negative: false, fraction: 70, blocks: 3 });
+  assert.deepEqual(strengthFillParts(-1), { negative: true, fraction: 100, blocks: 0 });
+  assert.deepEqual(strengthFillParts(-1.01), { negative: true, fraction: 1, blocks: 1 });
   assert.deepEqual(strengthFillParts(-3.7), { negative: true, fraction: 70, blocks: 3 });
+  assert.deepEqual(strengthFillParts(10), { negative: false, fraction: 100, blocks: 9 });
   assert.deepEqual(strengthFillParts(10.25), { negative: false, fraction: 25, blocks: 10 });
   assert.deepEqual(strengthFillParts(-12.34), { negative: true, fraction: 34, blocks: 10 });
-  assert.deepEqual(strengthFillParts(100), { negative: false, fraction: 0, blocks: 10 });
+  assert.deepEqual(strengthFillParts(100), { negative: false, fraction: 100, blocks: 10 });
   assert.deepEqual(strengthFillParts("invalid"), { negative: false, fraction: 0, blocks: 0 });
 });
 

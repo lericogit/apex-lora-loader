@@ -264,10 +264,11 @@ export function strengthFillParts(value) {
   const strength = normalizeStrength(value, 0);
   const magnitude = Math.abs(strength);
   const whole = Math.floor(magnitude);
+  const exactInteger = magnitude > 0 && magnitude === whole;
   return {
     negative: strength < 0,
-    fraction: roundToTwo((magnitude - whole) * 100),
-    blocks: Math.min(10, whole),
+    fraction: exactInteger ? 100 : roundToTwo((magnitude - whole) * 100),
+    blocks: Math.min(10, exactInteger ? whole - 1 : whole),
   };
 }
 
