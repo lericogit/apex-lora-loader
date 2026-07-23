@@ -228,7 +228,7 @@ export function allRows(state) {
 }
 
 export function toggleSectionRows(section) {
-  const enable = section.loras.some((row) => !row.enabled);
+  const enable = !section.loras.some((row) => row.enabled);
   for (const row of section.loras) row.enabled = enable;
   return enable;
 }

@@ -105,14 +105,14 @@ test("strength fills split fractional progress from capped whole-number blocks",
 });
 
 
-test("section toggle enables mixed rows and disables fully enabled rows", () => {
+test("section toggle disables mixed rows and enables only fully disabled sections", () => {
   const section = sampleState().sections[0];
   section.loras[1].enabled = false;
 
-  assert.equal(toggleSectionRows(section), true);
-  assert.equal(section.loras.every((item) => item.enabled), true);
   assert.equal(toggleSectionRows(section), false);
   assert.equal(section.loras.every((item) => !item.enabled), true);
+  assert.equal(toggleSectionRows(section), true);
+  assert.equal(section.loras.every((item) => item.enabled), true);
 });
 
 

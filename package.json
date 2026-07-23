@@ -1,11 +1,11 @@
 {
   "name": "apex-lora-loader",
-  "version": "0.3.2",
+  "version": "0.4.1",
   "private": true,
   "type": "module",
   "license": "MIT",
   "repository": "https://github.com/lericogit/apex-lora-loader.git",
   "scripts": {
-    "test": "node --test tests/state.test.js"
+    "test": "node --test tests/state.test.js tests/preset_jobs_state.test.js tests/preset_jobs_queue.test.js"
   }
 }

@@ -102,6 +102,7 @@ class BackendTests(unittest.TestCase):
         input_types = nodes.ApexLoraLoader.INPUT_TYPES()
         self.assertEqual(input_types["optional"]["prompt"][0], "STRING")
         self.assertTrue(input_types["optional"]["prompt"][1]["forceInput"])
+        self.assertEqual(input_types["optional"]["preset_jobs"][0], "APEX_PRESET_JOBS")
         self.assertEqual(nodes.ApexLoraLoader.RETURN_TYPES, ("MODEL", "STRING"))
         self.assertEqual(nodes.ApexLoraLoader.RETURN_NAMES, ("model", "prompt"))
 
@@ -243,6 +244,7 @@ class BackendTests(unittest.TestCase):
                 "base",
                 state(entries),
                 prompt="subject",
+                preset_jobs={"ignored": True},
                 unique_id=None,
             )
 

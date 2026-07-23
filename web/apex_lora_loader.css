@@ -716,6 +716,11 @@
   color: var(--apex-primary) !important;
   box-shadow: inset 0 0 8px rgba(68, 166, 173, .08);
 }
+.apex-trigger-button.saved-inactive {
+  background: rgba(151, 128, 74, .11) !important;
+  color: #b9aa82 !important;
+  box-shadow: inset 0 0 0 1px rgba(185, 170, 130, .12);
+}
 .apex-row-remove { color: var(--apex-error-soft) !important; }
 .apex-row-remove:hover { background: rgba(147, 0, 10, .18) !important; color: #ffdad8 !important; }
 .apex-row.disabled .apex-icon { color: var(--apex-text-dim); }

@@ -120,6 +120,12 @@ class ApexLoraLoader:
                         "tooltip": "Prompt to augment with active trigger words from enabled LoRAs.",
                     },
                 ),
+                "preset_jobs": (
+                    "APEX_PRESET_JOBS",
+                    {
+                        "tooltip": "Optional control link from Apex Preset Jobs. It does not change LoRA loading during normal execution.",
+                    },
+                ),
             },
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
@@ -130,7 +136,11 @@ class ApexLoraLoader:
     CATEGORY = "loaders/Apex"
     DESCRIPTION = "Apply an ordered LoRA stack and add its active trigger words to a prompt."
 
-    def load_loras(self, model, stack_data, prompt="", unique_id=None):
+    def load_loras(self, model, stack_data, prompt="", preset_jobs=None, unique_id=None):
+        # The companion Preset Jobs node uses this optional input only to identify
+        # its target in the frontend. LoRA execution deliberately remains wholly
+        # determined by stack_data.
+        del preset_jobs
         loaded_loras = {}
         renamed = []
         rows = parse_state(stack_data)

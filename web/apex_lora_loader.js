@@ -281,9 +281,25 @@ async function fetchJson(path, options = undefined) {
 
 async function loadCatalog(force = false) {
   if (force || catalogCache === null) {
-    catalogCache = await fetchJson("/apex_lora_loader/loras");
+    catalogCache = await fetchJson("/apex_lora_loader/loras", { cache: "no-store" });
   }
   return catalogCache;
+}
+
+
+async function refreshCatalogFromComfy() {
+  // ComfyUI has already refreshed its folder-path cache before invoking the
+  // extension hook. Only reload Apex's lightweight filename/folder listing
+  // here; identity hashing and rename verification belong to the Apex rescan.
+  catalogCache = null;
+  try {
+    await loadCatalog(true);
+  } catch (error) {
+    // Do not turn an otherwise successful native node-definition refresh into
+    // a global failure. Leave the cache empty so the next chooser open retries.
+    catalogCache = null;
+    console.warn("[Apex LoRA Loader] Could not refresh the LoRA catalog.", error);
+  }
 }
 
 
@@ -1905,17 +1921,24 @@ function buildRow(node, section, row) {
   const triggerCount = triggerMetadata.trigger_words.length;
   const activeTriggerCount = triggerMetadata.active_trigger_words.length;
   const triggerPosition = normalizeTriggerPosition(row.trigger_position);
+  const triggerState = !triggerCount
+    ? "empty"
+    : activeTriggerCount > 0
+      ? "active"
+      : "saved-inactive";
   const trigger = showTriggerButton
     ? iconButton(
         "tag",
-        triggerCount
-          ? `${triggerPosition === "prepend" ? "Prepend" : "Append"} ${activeTriggerCount} of ${triggerCount} trigger words: ${triggerMetadata.active_trigger_words.join(", ") || "none active"}`
-          : "Add trigger words",
+        triggerState === "empty"
+          ? "Add trigger words"
+          : triggerState === "saved-inactive"
+            ? `${triggerCount} trigger word${triggerCount === 1 ? " is" : "s are"} saved, but currently inactive`
+            : `${triggerPosition === "prepend" ? "Prepend" : "Append"} ${activeTriggerCount} of ${triggerCount} trigger words: ${triggerMetadata.active_trigger_words.join(", ")}`,
       )
     : null;
   if (trigger) {
-    trigger.classList.add("apex-trigger-button");
-    trigger.classList.toggle("active", activeTriggerCount > 0);
+    trigger.classList.add("apex-trigger-button", triggerState);
+    trigger.dataset.triggerState = triggerState;
     trigger.addEventListener("click", () => showTriggerEditor(node, trigger, row.id));
   }
 
@@ -1968,14 +1991,15 @@ function buildSection(node, section) {
     commit(node, { fullPresetDirty: true });
   });
   const allEnabled = section.loras.length > 0 && enabledCount === section.loras.length;
+  const anyEnabled = enabledCount > 0;
   const toggleAll = iconButton(
     "listTodo",
-    allEnabled ? "Disable all LoRAs in this section" : "Enable all LoRAs in this section",
+    anyEnabled ? "Disable all LoRAs in this section" : "Enable all LoRAs in this section",
     "apex-section-toggle-all",
   );
   toggleAll.disabled = section.loras.length === 0;
-  toggleAll.classList.toggle("active", allEnabled);
-  toggleAll.setAttribute("aria-pressed", String(allEnabled));
+  toggleAll.classList.toggle("active", anyEnabled);
+  toggleAll.setAttribute("aria-pressed", allEnabled ? "true" : anyEnabled ? "mixed" : "false");
   toggleAll.addEventListener("click", () => {
     toggleSectionRows(section);
     commit(node, { presetDirty: true });
@@ -2375,6 +2399,9 @@ api.addEventListener("apex-lora-loader/resolved", handleRuntimeResolution);
 
 app.registerExtension({
   name: "apex.ApexLoraLoader",
+  async refreshComboInNodes() {
+    await refreshCatalogFromComfy();
+  },
   async beforeRegisterNodeDef(nodeType, nodeData) {
     if (nodeData?.name !== NODE_CLASS) return;
     const originalCreated = nodeType.prototype.onNodeCreated;

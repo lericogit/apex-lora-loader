@@ -7,7 +7,7 @@
 Organize, filter, reorder, preset, recover, and annotate large LoRA stacks in one compact node.
 
 [![License: MIT][license-shield]][license-link]
-[![Version: v0.3.2][version-shield]][version-link]
+[![Version: v0.4.1][version-shield]][version-link]
 [![ComfyUI Custom Node][comfyui-shield]][comfyui-link]
 [![Local only][local-shield]][local-link]
 [![No extra packages][dependencies-shield]][dependencies-link]
@@ -25,12 +25,13 @@ Organize, filter, reorder, preset, recover, and annotate large LoRA stacks in on
 
 ## Overview
 
-Apex LoRA Loader provides MODEL-only LoRA patching with an optional prompt passthrough. It combines an ordered LoRA stack, responsive named sections, per-node folder filtering, active-state and full-setup presets, rename-safe file identities, and manually curated trigger words.
+Apex LoRA Loader provides MODEL-only LoRA patching with an optional prompt passthrough. It combines an ordered LoRA stack, responsive named sections, per-node folder filtering, active-state and full-setup presets, rename-safe file identities, and manually curated trigger words. The optional **Apex Preset Jobs** companion queues ordered experiments from frozen active-preset snapshots without replacing the loader's visible setup.
 
 | Port | Direction | Purpose |
 | --- | --- | --- |
 | `model` | Input | Diffusion model to patch with enabled LoRAs. |
 | `prompt` | Optional input | Prompt to augment with active trigger words. |
+| `preset_jobs` | Optional input | Control connection from an Apex Preset Jobs companion. Ignored during ordinary LoRA loading. |
 | `model` | Output | Model patched in visual section and row order. |
 | `prompt` | Output | Prompt with selected trigger words prepended or appended. |
 
@@ -45,8 +46,10 @@ The node intentionally has no CLIP socket. LoRAs are applied to `MODEL` with zer
 - Responsive manual section columns with stable placement and independent vertical stacking.
 - A polished dark interface with split toolbar islands, responsive stack metrics, and a subtle blue-teal fog surface.
 - Recursive per-node folder filters with All, None, Root, and multi-folder selection.
+- Native ComfyUI node-definition refresh support for fast LoRA filename and folder discovery.
 - Confirmed **Add all LoRAs** action for the current filtered library.
 - Installation-wide presets for either active LoRA states or complete node setups, with direct inline management from the custom preset menu.
+- An independent Preset Jobs companion for ordered, repeatable multi-preset queue runs with live results.
 - SHA-256 identities that recover LoRAs after file or folder renames.
 - Multiple active trigger words per LoRA with per-row prepend or append placement.
 - Two-decimal strengths and configurable horizontal drag increments.
@@ -116,11 +119,29 @@ Presets are shared by every Apex node and workflow in the same ComfyUI installat
 
 Active LoRA matching prefers SHA-256, with exact-name fallback for entries without a usable hash. Duplicate LoRAs match one-to-one in current row order, missing entries are reported but never added, and empty presets are valid. Both preset types can be overwritten, renamed inline, or deleted directly from the menu without first applying them.
 
+### Preset Jobs
+
+**Apex Preset Jobs** is an optional companion node for queueing several active LoRA combinations in one action. Connect its `preset_jobs` output to the loader's optional input, add active-state presets to the ordered list, then use **Queue jobs** from the helper.
+
+- Every row represents one normal ComfyUI prompt submission.
+- Jobs can be duplicated and rearranged with forgiving full-row drag targets.
+- Expanded view shows individual runs; grouped view condenses adjacent identical jobs into an adjustable `×N` count without changing their order.
+- Adding a preset creates a frozen snapshot of its enabled LoRA identities and strengths. Later renaming, editing, or deleting the global preset does not rewrite saved jobs.
+- Each snapshot applies to the connected loader's current rows. Sections, ordering, filters, settings, and trigger-word configuration remain intact.
+- Missing stack entries or unresolved LoRA files skip only the affected jobs and show their reasons.
+- Live row states distinguish skipped, queued, running, completed, failed, interrupted, and unsubmitted jobs for the current browser session.
+
+The helper temporarily substitutes only the loader's hidden serialized state while ComfyUI converts each prompt. The loader interface never visually switches presets and its saved setup is restored immediately. ComfyUI's standard Queue button still performs one ordinary run with the current loader state; batching starts only from **Queue jobs**.
+
+Preset Jobs uses ComfyUI's normal per-prompt queue path. Existing seed controls therefore behave normally for every job: fixed seeds remain fixed, while randomize, increment, and decrement modes advance once per submitted run. ComfyUI's global queue-count value is intentionally ignored by the helper because repetitions are represented directly in its job list.
+
 ### Rename-safe identities
 
 When a LoRA is selected, Apex records its canonical relative path, file size, and SHA-256 digest. If the exact path later disappears, same-size files are checked for the stored digest. A content match updates the row to its new canonical path; changed contents are treated as a different LoRA.
 
 Exact existing paths always win, and identical duplicate files resolve deterministically. The hash cache contains only a bounded set of digest strings keyed by path, size, and modification time.
+
+ComfyUI's native **Refresh Node Definitions** action refreshes Apex's lightweight filename and folder catalog, so newly added LoRAs appear in choosers without identity analysis. Apex's own refresh button remains the explicit advanced rescan for rename recovery, hashes, and saved metadata verification.
 
 ### Trigger words and prompt routing
 
@@ -170,7 +191,7 @@ cd custom_nodes
 git clone https://github.com/lericogit/apex-lora-loader.git
 ~~~
 
-Restart ComfyUI, hard-refresh the browser, then add **Apex LoRA Loader** from `loaders/Apex`.
+Restart ComfyUI, hard-refresh the browser, then add **Apex LoRA Loader** from `loaders/Apex`. The optional **Apex Preset Jobs** companion is available in the same category.
 
 No `pip install` or `npm install` step is required.
 
@@ -183,6 +204,7 @@ No `pip install` or `npm install` step is required.
 5. Drag rows or sections into the desired application order.
 6. Optionally connect a prompt and enable trigger-word controls in Settings.
 7. Save useful combinations as an Active LoRA preset, or preserve the complete node as a Full setup preset.
+8. Optionally connect **Apex Preset Jobs**, add frozen active-preset runs, arrange them, and queue the list from the helper.
 
 Enabled, nonzero-strength rows are applied down each section and column, proceeding through columns from left to right. Disabled and zero-strength rows are skipped.
 
@@ -207,6 +229,8 @@ An enabled row that cannot be resolved fails clearly instead of silently loading
 | Data | Scope | Storage |
 | --- | --- | --- |
 | Sections, rows, order, filters, settings, and trigger placement | Per node/workflow | Hidden versioned JSON serialized by ComfyUI |
+| Frozen Preset Jobs list and view mode | Per helper node/workflow | Separate hidden versioned JSON serialized by ComfyUI |
+| Preset Jobs execution results | Current browser session | Memory only |
 | Active LoRA and full setup presets | Installation-wide | `ComfyUI/user/__apex_lora_loader/presets.json` by default |
 | Hashes and trigger-word metadata | Installation-wide | `ComfyUI/user/__apex_lora_loader/lora_metadata.json` by default |
 | Loaded LoRA tensors | Current execution only | Memory |
@@ -238,7 +262,7 @@ Embedded Lucide icons retain their ISC terms, and Feather-derived Lucide icons r
 
 [license-shield]: https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square
 [license-link]: LICENSE
-[version-shield]: https://img.shields.io/badge/version-v0.3.2-1f6feb?style=flat-square
+[version-shield]: https://img.shields.io/badge/version-v0.4.1-1f6feb?style=flat-square
 [version-link]: https://github.com/lericogit/apex-lora-loader/releases
 [comfyui-shield]: https://img.shields.io/badge/ComfyUI-custom_node-6f42c1?style=flat-square
 [comfyui-link]: https://github.com/Comfy-Org/ComfyUI
