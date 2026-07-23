@@ -135,6 +135,12 @@ The helper temporarily substitutes only the loader's hidden serialized state whi
 
 Preset Jobs uses ComfyUI's normal per-prompt queue path. Existing seed controls therefore behave normally for every job: fixed seeds remain fixed, while randomize, increment, and decrement modes advance once per submitted run. ComfyUI's global queue-count value is intentionally ignored by the helper because repetitions are represented directly in its job list.
 
+<p align="center">
+  <img src="docs/images/apex_preset_jobs_img_1.png" alt="Apex Preset Jobs with an ordered list of ready preset runs, duplication controls, grouping, and queue action" width="72%">
+  <br>
+  <sub>Build an ordered queue from frozen active presets, duplicate or rearrange jobs, and monitor each run individually.</sub>
+</p>
+
 ### Rename-safe identities
 
 When a LoRA is selected, Apex records its canonical relative path, file size, and SHA-256 digest. If the exact path later disappears, same-size files are checked for the stored digest. A content match updates the row to its new canonical path; changed contents are treated as a different LoRA.

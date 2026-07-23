@@ -2016,6 +2016,7 @@ function buildSection(node, section) {
   });
   const count = document.createElement("span");
   count.className = "apex-section-count";
+  count.classList.toggle("active", enabledCount > 0);
   count.textContent = `${enabledCount}/${section.loras.length}`;
   count.title = "Enabled / total LoRAs";
   const title = document.createElement("div");
