@@ -203,6 +203,8 @@ test("node display settings normalize and serialize with safe defaults", () => {
     show_trigger_button: true,
     strength_drag_step: 0.05,
     overlay_scale: 0.75,
+    run_on_change_enabled: true,
+    run_on_change_delay_ms: 725,
   };
   const normalized = normalizeState(state);
   assert.deepEqual(normalized.settings, state.settings);
@@ -214,6 +216,10 @@ test("node display settings normalize and serialize with safe defaults", () => {
   assert.equal(normalizeState(state).settings.overlay_scale, 0.75);
   state.settings.overlay_scale = 2;
   assert.equal(normalizeState(state).settings.overlay_scale, 1);
+  state.settings.run_on_change_delay_ms = 451.6;
+  assert.equal(normalizeState(state).settings.run_on_change_delay_ms, 452);
+  state.settings.run_on_change_delay_ms = 9000;
+  assert.equal(normalizeState(state).settings.run_on_change_delay_ms, 5000);
 
   delete state.settings;
   assert.deepEqual(normalizeState(state).settings, {
@@ -222,6 +228,8 @@ test("node display settings normalize and serialize with safe defaults", () => {
     show_trigger_button: false,
     strength_drag_step: 0.01,
     overlay_scale: 0.88,
+    run_on_change_enabled: false,
+    run_on_change_delay_ms: 450,
   });
 });
 
@@ -424,6 +432,8 @@ test("full preset snapshots preserve the complete normalized setup only", () => 
     show_trigger_button: true,
     strength_drag_step: 0.057,
     overlay_scale: 0.82,
+    run_on_change_enabled: true,
+    run_on_change_delay_ms: 725,
   };
   state.sections[0].collapsed = true;
   state.sections[0].column = 1;
@@ -445,6 +455,8 @@ test("full preset snapshots preserve the complete normalized setup only", () => 
     show_trigger_button: true,
     strength_drag_step: 0.06,
     overlay_scale: 0.82,
+    run_on_change_enabled: true,
+    run_on_change_delay_ms: 725,
   });
   assert.deepEqual(snapshot.sections.map((section) => section.id), ["s1", "s2"]);
   assert.deepEqual(snapshot.sections[0].loras.map((item) => item.id), ["a", "b"]);
@@ -473,6 +485,8 @@ test("full preset application replaces the setup and selects the preset", () => 
       show_trigger_button: true,
       strength_drag_step: 0.05,
       overlay_scale: 0.9,
+      run_on_change_enabled: true,
+      run_on_change_delay_ms: 300,
     },
     sections: [
       {

@@ -6,6 +6,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   show_trigger_button: false,
   strength_drag_step: 0.01,
   overlay_scale: 0.88,
+  run_on_change_enabled: false,
+  run_on_change_delay_ms: 450,
 });
 
 function roundToTwo(value) {
@@ -121,6 +123,13 @@ function normalizeOverlayScale(value) {
     : DEFAULT_SETTINGS.overlay_scale;
 }
 
+function normalizeRunOnChangeDelay(value) {
+  const delay = Number(value);
+  return Number.isFinite(delay)
+    ? Math.max(0, Math.min(5000, Math.round(delay)))
+    : DEFAULT_SETTINGS.run_on_change_delay_ms;
+}
+
 export function normalizeSettings(value) {
   return {
     show_safetensors: value?.show_safetensors !== false,
@@ -128,6 +137,8 @@ export function normalizeSettings(value) {
     show_trigger_button: value?.show_trigger_button === true,
     strength_drag_step: normalizeDragStep(value?.strength_drag_step),
     overlay_scale: normalizeOverlayScale(value?.overlay_scale),
+    run_on_change_enabled: value?.run_on_change_enabled === true,
+    run_on_change_delay_ms: normalizeRunOnChangeDelay(value?.run_on_change_delay_ms),
   };
 }
 

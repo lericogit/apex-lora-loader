@@ -434,6 +434,8 @@ class BackendTests(unittest.TestCase):
                         "show_trigger_button": True,
                         "strength_drag_step": 0.057,
                         "overlay_scale": 0.823,
+                        "run_on_change_enabled": True,
+                        "run_on_change_delay_ms": 451.6,
                         "unknown": "discard",
                     },
                     "sections": [
@@ -484,6 +486,8 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(saved["type"], "full")
             self.assertEqual(saved["state"]["settings"]["strength_drag_step"], 0.06)
             self.assertEqual(saved["state"]["settings"]["overlay_scale"], 0.82)
+            self.assertTrue(saved["state"]["settings"]["run_on_change_enabled"])
+            self.assertEqual(saved["state"]["settings"]["run_on_change_delay_ms"], 452)
             self.assertEqual(
                 [section["id"] for section in saved["state"]["sections"]],
                 ["section-two", "section-one"],
@@ -524,6 +528,22 @@ class BackendTests(unittest.TestCase):
                     "type": "full",
                     "state": {"version": 1, "folder_filters": None, "settings": {}, "sections": "bad"},
                 },
+                {
+                    "name": "Bad delay",
+                    "type": "full",
+                    "state": {
+                        "version": 1,
+                        "folder_filters": None,
+                        "settings": {"run_on_change_delay_ms": -1},
+                        "sections": [{
+                            "id": "section",
+                            "name": "Section",
+                            "collapsed": False,
+                            "column": 0,
+                            "loras": [],
+                        }],
+                    },
+                },
             ]
             for preset in invalid_presets:
                 with self.subTest(preset=preset), self.assertRaises(ValueError):
@@ -544,6 +564,8 @@ class BackendTests(unittest.TestCase):
                         "show_trigger_button": False,
                         "strength_drag_step": 0.01,
                         "overlay_scale": 0.88,
+                        "run_on_change_enabled": False,
+                        "run_on_change_delay_ms": 450,
                     },
                     "sections": [{
                         "id": "section",

@@ -36,12 +36,14 @@ import {
 } from "./state.js";
 import { createSingleOwnerController } from "./overlay_controller.js";
 import { previewDisplayName, previewSummary } from "./overlay_state.js";
+import { activeLoraSignature, createAutoQueueController } from "./auto_queue.js";
 
 const NODE_CLASS = "ApexLoraLoader";
 const DATA_WIDGET = "stack_data";
 const DEFAULT_SIZE = [420, 250];
 const PREVIEW_MIN_HEIGHT = 132;
 const STATUS_MESSAGE_DURATION_MS = 5000;
+const PRESET_JOBS_SUBMISSION_EVENT = "apex-preset-jobs/submission-state";
 const NODE_TITLE_COLOR = "#181c23";
 const NODE_BODY_COLOR = "#0f141a";
 const SECTION_TOGGLE_ICON_STYLE = "chevrons";
@@ -59,6 +61,7 @@ let dragPayload = null;
 let editorView = null;
 let openTriggerPreview = null;
 let triggerPreviewSequence = 0;
+let presetJobsSubmissionBusy = false;
 
 // Embedded Lucide SVG paths are ISC licensed; Feather-derived paths are MIT licensed.
 // See ../THIRD_PARTY_NOTICES.md.
@@ -359,6 +362,110 @@ function setStatus(node, message = "", error = false) {
       if (node.__apexStatus === status) setStatus(node, "");
     }, STATUS_MESSAGE_DURATION_MS);
   }
+}
+
+
+function editorQueueIsBlocked(view = editorView) {
+  return presetJobsSubmissionBusy
+    || view?.manualQueueBusy === true
+    || view?.autoQueue?.state.inFlight === true;
+}
+
+
+function syncEditorQueueControls(node, autoState = null) {
+  const view = editorView;
+  if (!view || view.node !== node) return;
+  const state = autoState || view.autoQueue?.state || {
+    enabled: false,
+    pending: false,
+    inFlight: false,
+    phase: "off",
+  };
+  const control = view.autoQueueControl;
+  if (control) {
+    control.classList.toggle("enabled", state.enabled);
+    control.classList.toggle("pending", state.pending && !state.inFlight);
+    control.classList.toggle("submitting", state.inFlight);
+    control.classList.toggle("error", state.phase === "error");
+    control.classList.toggle("waiting", state.phase === "waiting");
+    control.setAttribute("aria-pressed", state.enabled ? "true" : "false");
+    const title = !state.enabled
+      ? "Enable Run on change for LoRA states and committed strengths"
+      : state.phase === "waiting"
+        ? "Run on change is waiting for another Apex submission to finish"
+        : state.inFlight
+          ? "Run on change is submitting the current workflow"
+          : "Run on change is enabled for LoRA states and committed strengths";
+    control.title = title;
+    control.setAttribute("aria-label", title);
+  }
+
+  if (!view.runButton) return;
+  const blocked = editorQueueIsBlocked(view);
+  view.runButton.disabled = blocked;
+  view.runButton.title = presetJobsSubmissionBusy
+    ? "Wait for Apex Preset Jobs to finish submitting"
+    : view.manualQueueBusy
+      ? "The current workflow is being queued"
+      : state.inFlight
+        ? "Run on change is queueing the current workflow"
+        : "Queue the current workflow once";
+}
+
+
+function handleAutoQueueState(node, state) {
+  syncEditorQueueControls(node, state);
+  if (state.phase === "armed") {
+    setStatus(node, "");
+  } else if (state.phase === "scheduled") {
+    setStatus(node, "Workflow update scheduled…");
+  } else if (state.phase === "waiting") {
+    setStatus(node, "Waiting for the active Apex submission…");
+  } else if (state.phase === "submitting") {
+    setStatus(node, "Queueing changed workflow…");
+  } else if (state.phase === "queued") {
+    setStatus(node, "Changed workflow queued.");
+  } else if (state.phase === "error") {
+    setStatus(node, state.error?.message || "Unable to queue the changed workflow.", true);
+  }
+}
+
+
+function notifyEditorAutoQueue(node) {
+  const view = editorView;
+  if (!view || view.node !== node || !view.autoQueue?.state.enabled) return false;
+  return view.autoQueue.notifyChange();
+}
+
+
+async function queueWorkflowFromEditor(node) {
+  const view = editorView;
+  if (!view || view.node !== node || editorQueueIsBlocked(view)) return false;
+  view.autoQueue?.acknowledgeCurrent();
+  view.manualQueueBusy = true;
+  syncEditorQueueControls(node);
+  setStatus(node, "Queueing workflow…");
+  try {
+    await app.queuePrompt(0, 1);
+    setStatus(node, "Workflow queued.");
+    return true;
+  } catch (error) {
+    setStatus(node, error?.message || "Unable to queue workflow.", true);
+    return false;
+  } finally {
+    view.manualQueueBusy = false;
+    syncEditorQueueControls(node);
+    view.autoQueue?.resume();
+  }
+}
+
+
+function handlePresetJobsSubmissionState(event) {
+  presetJobsSubmissionBusy = event?.detail?.busy === true;
+  const view = editorView;
+  if (!view) return;
+  syncEditorQueueControls(view.node);
+  if (!presetJobsSubmissionBusy) view.autoQueue?.resume();
 }
 
 
@@ -937,6 +1044,20 @@ function showNodeSettings(node, anchor) {
   dragStep.title = `Exact strength change per ${STRENGTH_DRAG_PIXELS_PER_TICK} horizontal pixels`;
   stepRow.append(stepLabel, dragStep);
   fields.appendChild(stepRow);
+  const delayRow = document.createElement("label");
+  delayRow.className = "apex-setting-row";
+  const delayLabel = document.createElement("span");
+  delayLabel.textContent = "Run on change delay (ms)";
+  const autoQueueDelay = document.createElement("input");
+  autoQueueDelay.className = "apex-setting-number";
+  autoQueueDelay.type = "number";
+  autoQueueDelay.min = "0";
+  autoQueueDelay.max = "5000";
+  autoQueueDelay.step = "50";
+  autoQueueDelay.value = String(settings.run_on_change_delay_ms);
+  autoQueueDelay.title = "Wait after a committed LoRA change before queueing; 0 queues immediately";
+  delayRow.append(delayLabel, autoQueueDelay);
+  fields.appendChild(delayRow);
   const scaleRow = document.createElement("label");
   scaleRow.className = "apex-setting-row";
   const scaleLabel = document.createElement("span");
@@ -1094,6 +1215,7 @@ function showNodeSettings(node, anchor) {
     showFolderPaths.checked = DEFAULT_SETTINGS.show_folder_paths;
     showTriggerButton.checked = DEFAULT_SETTINGS.show_trigger_button;
     dragStep.value = String(DEFAULT_SETTINGS.strength_drag_step);
+    autoQueueDelay.value = String(DEFAULT_SETTINGS.run_on_change_delay_ms);
     overlayScale.value = String(Math.round(DEFAULT_SETTINGS.overlay_scale * 100));
   });
   apply.addEventListener("click", () => {
@@ -1101,6 +1223,12 @@ function showNodeSettings(node, anchor) {
     if (!Number.isFinite(step) || step < 0.01 || step > 100) {
       setStatus(node, "Strength drag step must be between 0.01 and 100.", true);
       dragStep.focus();
+      return;
+    }
+    const delayMs = Number(autoQueueDelay.value);
+    if (!Number.isFinite(delayMs) || delayMs < 0 || delayMs > 5000) {
+      setStatus(node, "Run on change delay must be between 0 and 5000 milliseconds.", true);
+      autoQueueDelay.focus();
       return;
     }
     const scalePercent = Number(overlayScale.value);
@@ -1114,6 +1242,7 @@ function showNodeSettings(node, anchor) {
       show_folder_paths: showFolderPaths.checked,
       show_trigger_button: showTriggerButton.checked,
       strength_drag_step: step,
+      run_on_change_delay_ms: delayMs,
       overlay_scale: scalePercent / 100,
     });
     commit(node, { fullPresetDirty: true });
@@ -1872,7 +2001,7 @@ function buildToolbar(node) {
 }
 
 
-function installStrengthDrag(node, row, input) {
+function installStrengthDrag(node, row, input, autoQueue = false) {
   let drag = null;
   let ignoreClick = false;
 
@@ -1914,12 +2043,23 @@ function installStrengthDrag(node, row, input) {
     if (!drag || drag.pointerId !== event.pointerId) return;
     const moved = drag.moved;
     const canceled = event.type === "pointercancel";
+    const startValue = drag.startValue;
     drag = null;
     if (moved && document.activeElement === input) input.blur();
     input.classList.remove("dragging", "scrubbing");
     if (input.hasPointerCapture(event.pointerId)) input.releasePointerCapture(event.pointerId);
     event.preventDefault();
     ignoreClick = true;
+    if (moved && canceled) {
+      row.strength = startValue;
+      input.value = formatStrength(row.strength);
+      setStrengthFill(input, row.strength);
+      setTimeout(() => {
+        ignoreClick = false;
+        renderNode(node);
+      }, 0);
+      return;
+    }
     if (!moved) {
       if (!canceled) {
         input.focus({ preventScroll: true });
@@ -1929,6 +2069,7 @@ function installStrengthDrag(node, row, input) {
       return;
     }
     commit(node, { presetDirty: true, render: false });
+    if (autoQueue) notifyEditorAutoQueue(node);
     setTimeout(() => {
       ignoreClick = false;
       renderNode(node);
@@ -1953,7 +2094,7 @@ function setStrengthFill(input, value) {
 }
 
 
-function createStrengthInput(node, row, className = "") {
+function createStrengthInput(node, row, className = "", autoQueue = false) {
   const input = document.createElement("input");
   input.className = `apex-strength${className ? ` ${className}` : ""}`;
   input.type = "text";
@@ -1963,6 +2104,11 @@ function createStrengthInput(node, row, className = "") {
   setStrengthFill(input, row.strength);
   input.title = `Model strength. Drag left or right to adjust by exactly ${node.__apexState.settings.strength_drag_step} per tick; click to type.`;
   input.setAttribute("aria-label", `Model strength for ${row.name}`);
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    input.blur();
+  });
   input.addEventListener("change", () => {
     if (input.classList.contains("scrubbing")) return;
     const value = parseStrengthInput(input.value);
@@ -1975,8 +2121,9 @@ function createStrengthInput(node, row, className = "") {
     input.value = formatStrength(row.strength);
     setStrengthFill(input, row.strength);
     commit(node, { presetDirty: true });
+    if (autoQueue) notifyEditorAutoQueue(node);
   });
-  installStrengthDrag(node, row, input);
+  installStrengthDrag(node, row, input, autoQueue);
   return input;
 }
 
@@ -2078,6 +2225,7 @@ function buildRow(node, section, row) {
   enabled.addEventListener("change", () => {
     row.enabled = enabled.checked;
     commit(node, { presetDirty: true });
+    notifyEditorAutoQueue(node);
   });
   enabledCell.appendChild(enabled);
 
@@ -2092,7 +2240,7 @@ function buildRow(node, section, row) {
   name.appendChild(loraNameContent(row.name, node.__apexState.settings));
   name.addEventListener("click", () => showLoraChooser(node, name, section.id, row.id));
 
-  const strength = createStrengthInput(node, row);
+  const strength = createStrengthInput(node, row, "", true);
 
   const triggerMetadata = normalizeTriggerMetadata(row);
   const triggerCount = triggerMetadata.trigger_words.length;
@@ -2180,6 +2328,7 @@ function buildSection(node, section) {
   toggleAll.addEventListener("click", () => {
     toggleSectionRows(section);
     commit(node, { presetDirty: true });
+    notifyEditorAutoQueue(node);
   });
   const name = document.createElement("input");
   name.className = "apex-section-name";
@@ -2592,6 +2741,10 @@ function renderPreview(node, summary = previewSummary(node.__apexState)) {
 function renderEditor(node) {
   const view = editorView;
   if (!view || view.node !== node || !view.root?.isConnected || !node.__apexState) return;
+  const settings = normalizeSettings(node.__apexState.settings);
+  if (view.autoQueue && view.autoQueue.state.enabled !== settings.run_on_change_enabled) {
+    view.autoQueue.setEnabled(settings.run_on_change_enabled);
+  }
   syncEditorStage(node);
   view.pendingScrollTop = view.stack?.scrollTop ?? view.pendingScrollTop ?? 0;
   view.controls.replaceChildren(buildToolbar(node));
@@ -2690,6 +2843,14 @@ function mountNodeEditor(node) {
     node.__apexStatus?.message || "",
     node.__apexStatus?.error === true,
   );
+  const autoQueueControl = document.createElement("button");
+  autoQueueControl.type = "button";
+  autoQueueControl.className = "apex-editor-auto-queue";
+  autoQueueControl.setAttribute("aria-pressed", "false");
+  const autoQueueLabel = document.createElement("span");
+  autoQueueLabel.className = "apex-editor-auto-queue-label";
+  autoQueueLabel.textContent = "Run on change";
+  autoQueueControl.appendChild(autoQueueLabel);
   const run = document.createElement("button");
   run.type = "button";
   run.className = "apex-editor-run";
@@ -2698,28 +2859,16 @@ function mountNodeEditor(node) {
   const runLabel = document.createElement("span");
   runLabel.textContent = "Run workflow";
   run.append(svgIcon("play"), runLabel);
-  run.addEventListener("click", async () => {
-    if (run.disabled) return;
-    run.disabled = true;
-    run.setAttribute("aria-busy", "true");
-    setStatus(node, "Queueing workflow…");
-    try {
-      await app.queuePrompt(0, 1);
-      setStatus(node, "Workflow queued.");
-    } catch (error) {
-      setStatus(node, error?.message || "Unable to queue workflow.", true);
-    } finally {
-      run.disabled = false;
-      run.removeAttribute("aria-busy");
-    }
-  });
   const close = document.createElement("button");
   close.type = "button";
   close.className = "apex-editor-close";
   close.title = "Close editor";
   close.setAttribute("aria-label", "Close Apex LoRA editor");
   close.appendChild(svgIcon("x"));
-  header.append(controls, status, run, close);
+  const runCluster = document.createElement("div");
+  runCluster.className = "apex-editor-run-cluster";
+  runCluster.append(run, autoQueueControl);
+  header.append(controls, status, runCluster, close);
 
   const root = document.createElement("div");
   root.className = "apex-lora-root apex-editor-root";
@@ -2770,6 +2919,10 @@ function mountNodeEditor(node) {
     root,
     controls,
     statusElement: status,
+    autoQueue: null,
+    autoQueueControl,
+    runButton: run,
+    manualQueueBusy: false,
     stack: null,
     content: null,
     pendingScrollTop: node.__apexEditorScrollTop ?? 0,
@@ -2778,6 +2931,35 @@ function mountNodeEditor(node) {
     keydown,
     previousFocus,
   };
+  const view = editorView;
+  view.autoQueue = createAutoQueueController({
+    getDelayMs: () => normalizeSettings(node.__apexState.settings).run_on_change_delay_ms,
+    getSignature: () => activeLoraSignature(node.__apexState),
+    isBlocked: () => presetJobsSubmissionBusy || view.manualQueueBusy,
+    submit: () => app.queuePrompt(0, 1),
+    onState: (state) => handleAutoQueueState(node, state),
+  });
+  view.autoQueue.setEnabled(
+    normalizeSettings(node.__apexState.settings).run_on_change_enabled,
+  );
+  autoQueueControl.addEventListener("click", () => {
+    const enabled = view.autoQueue.setEnabled(!view.autoQueue.state.enabled);
+    node.__apexState.settings = normalizeSettings({
+      ...node.__apexState.settings,
+      run_on_change_enabled: enabled,
+    });
+    commit(node, { fullPresetDirty: true, render: false });
+    setStatus(node, enabled ? "Run on change enabled." : "Run on change disabled.");
+  });
+  run.addEventListener("click", async () => {
+    if (run.disabled) return;
+    run.setAttribute("aria-busy", "true");
+    try {
+      await queueWorkflowFromEditor(node);
+    } finally {
+      run.removeAttribute("aria-busy");
+    }
+  });
   close.addEventListener("click", () => closeNodeEditor(node));
   overlay.addEventListener("keydown", overlayKeydown);
   overlay.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
@@ -2789,6 +2971,7 @@ function mountNodeEditor(node) {
   document.body.classList.add("apex-editor-active");
   resizeObserver?.observe(shell);
   syncEditorStage(node);
+  syncEditorQueueControls(node);
   setTimeout(() => close.focus({ preventScroll: true }), 0);
 }
 
@@ -2798,6 +2981,7 @@ function unmountNodeEditor(node) {
   if (!view || view.node !== node) return;
   node.__apexEditorScrollTop = view.stack?.scrollTop ?? view.pendingScrollTop ?? 0;
   if (view.layoutFrame != null) cancelAnimationFrame(view.layoutFrame);
+  view.autoQueue?.dispose();
   view.resizeObserver?.disconnect();
   document.removeEventListener("keydown", view.keydown, true);
   if (dragPayload?.node === node) {
@@ -2893,6 +3077,7 @@ function handleRuntimeResolution(event) {
 
 
 api.addEventListener("apex-lora-loader/resolved", handleRuntimeResolution);
+window.addEventListener(PRESET_JOBS_SUBMISSION_EVENT, handlePresetJobsSubmissionState);
 
 app.registerExtension({
   name: "apex.ApexLoraLoader",

@@ -6,6 +6,6 @@
   "license": "MIT",
   "repository": "https://github.com/lericogit/apex-lora-loader.git",
   "scripts": {
-    "test": "node --test tests/state.test.js tests/preset_jobs_state.test.js tests/preset_jobs_queue.test.js tests/overlay_state.test.js tests/overlay_controller.test.js"
+    "test": "node --test tests/state.test.js tests/preset_jobs_state.test.js tests/preset_jobs_queue.test.js tests/overlay_state.test.js tests/overlay_controller.test.js tests/auto_queue.test.js"
   }
 }

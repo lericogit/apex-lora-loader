@@ -25,6 +25,7 @@ const LOADER_CLASS = "ApexLoraLoader";
 const JOBS_WIDGET = "jobs_data";
 const RUN_WIDGET = "run_context";
 const DEFAULT_SIZE = [430, 320];
+const SUBMISSION_STATE_EVENT = "apex-preset-jobs/submission-state";
 
 let openPopover = null;
 let openPresetPreview = null;
@@ -33,6 +34,14 @@ let activeSubmission = null;
 let queueObserverInstalled = false;
 const batches = new Map();
 const promptJobs = new Map();
+
+
+function publishSubmissionState(busy) {
+  window.dispatchEvent(new CustomEvent(SUBMISSION_STATE_EVENT, {
+    detail: { busy: busy === true },
+  }));
+}
+
 
 const ICONS = {
   plus: [["path", { d: "M5 12h14" }], ["path", { d: "M12 5v14" }]],
@@ -476,13 +485,15 @@ async function queueJobs(node) {
     onSubmitting: (item) => setJobStatus(node, item.job.id, "submitting", "Submitting prompt…"),
   });
   activeSubmission = submission;
-  batches.set(batchId, { node, jobIds: new Set(valid.map((item) => item.job.id)) });
-  setMessage(node, `Submitting ${valid.length} job${valid.length === 1 ? "" : "s"}…`);
+  publishSubmissionState(true);
   try {
+    batches.set(batchId, { node, jobIds: new Set(valid.map((item) => item.job.id)) });
+    setMessage(node, `Submitting ${valid.length} job${valid.length === 1 ? "" : "s"}…`);
     await app.queuePrompt(0, valid.length);
   } finally {
     submission.queueCursor.restore();
     activeSubmission = null;
+    publishSubmissionState(false);
     batches.delete(batchId);
     node.__apexJobsBusy = false;
     for (const item of valid) {
@@ -831,6 +842,7 @@ app.registerExtension({
         activeSubmission.queueCursor.restore();
         batches.delete(activeSubmission.batchId);
         activeSubmission = null;
+        publishSubmissionState(false);
       }
       closePopover();
       closePresetPreview();

@@ -209,24 +209,99 @@
   box-shadow: 0 0 7px rgba(240, 113, 112, .4);
 }
 
+.apex-editor-run-cluster {
+  box-sizing: border-box;
+  display: flex;
+  height: 34px;
+  min-width: 0;
+  min-height: 34px;
+  align-items: center;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid rgba(119, 213, 220, .46);
+  border-radius: 7px;
+  background: rgba(15, 20, 26, .62);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .035),
+    0 0 12px rgba(68, 166, 173, .09);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.apex-editor-run-cluster:focus-within {
+  border-color: rgba(148, 242, 249, .7);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .045),
+    0 0 15px rgba(68, 166, 173, .15);
+}
+
+.apex-editor-header .apex-editor-auto-queue {
+  box-sizing: border-box;
+  display: inline-flex;
+  height: 32px;
+  min-width: 112px;
+  min-height: 32px;
+  padding: 0 12px;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  overflow: hidden;
+  border: 0 !important;
+  border-left: 1px solid rgba(119, 213, 220, .2) !important;
+  border-radius: 0 !important;
+  background: rgba(16, 23, 29, .72);
+  box-shadow: none !important;
+  color: var(--apex-text-dim);
+  font: 600 10px/1 var(--apex-body-font) !important;
+  letter-spacing: .01em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.apex-editor-header .apex-editor-auto-queue:hover,
+.apex-editor-header .apex-editor-auto-queue:focus-visible {
+  background: rgba(35, 52, 61, .78);
+  color: var(--apex-primary);
+}
+
+.apex-editor-header .apex-editor-auto-queue.enabled {
+  background:
+    linear-gradient(145deg, rgba(56, 135, 141, .36), rgba(38, 86, 98, .3));
+  color: var(--apex-primary-bright);
+}
+
+.apex-editor-header .apex-editor-auto-queue.pending,
+.apex-editor-header .apex-editor-auto-queue.waiting {
+  background: rgba(68, 166, 173, .15);
+}
+
+.apex-editor-header .apex-editor-auto-queue.submitting {
+  background: rgba(68, 166, 173, .2);
+}
+
+.apex-editor-header .apex-editor-auto-queue.error {
+  background: rgba(147, 0, 10, .13);
+  color: var(--apex-error-soft);
+}
+
 .apex-editor-run {
   box-sizing: border-box;
   display: inline-flex;
-  height: 34px;
+  height: 32px;
   min-width: 112px;
-  min-height: 34px;
+  min-height: 32px;
   padding: 0 12px;
   gap: 7px;
   align-items: center;
   justify-content: center;
   flex: none;
-  border-color: rgba(119, 213, 220, .5) !important;
-  border-radius: 7px !important;
+  border: 0 !important;
+  border-radius: 0 !important;
   background:
     linear-gradient(145deg, rgba(56, 135, 141, .42), rgba(40, 91, 104, .34)) !important;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, .045),
-    0 0 12px rgba(68, 166, 173, .1);
+  box-shadow: none;
   color: var(--apex-primary-bright) !important;
   font: 600 10px/1 var(--apex-body-font) !important;
   letter-spacing: .01em;
@@ -235,12 +310,9 @@
 
 .apex-editor-run:hover,
 .apex-editor-run:focus-visible {
-  border-color: rgba(148, 242, 249, .72) !important;
   background:
     linear-gradient(145deg, rgba(65, 157, 164, .52), rgba(43, 106, 120, .44)) !important;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, .06),
-    0 0 15px rgba(68, 166, 173, .18);
+  box-shadow: none;
 }
 
 .apex-editor-run svg {

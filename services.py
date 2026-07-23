@@ -489,12 +489,20 @@ class PresetStore:
         overlay_scale = float(overlay_scale)
         if not math.isfinite(overlay_scale) or overlay_scale < 0.5 or overlay_scale > 1:
             raise ValueError("Full preset overlay scale must be between 0.5 and 1.")
+        run_delay = settings.get("run_on_change_delay_ms", 450)
+        if isinstance(run_delay, bool) or not isinstance(run_delay, (int, float)):
+            raise ValueError("Full preset Run on change delay must be numeric.")
+        run_delay = float(run_delay)
+        if not math.isfinite(run_delay) or run_delay < 0 or run_delay > 5000:
+            raise ValueError("Full preset Run on change delay must be between 0 and 5000 milliseconds.")
         clean_settings = {
             "show_safetensors": settings.get("show_safetensors") is not False,
             "show_folder_paths": settings.get("show_folder_paths") is not False,
             "show_trigger_button": settings.get("show_trigger_button") is True,
             "strength_drag_step": round(drag_step, 2),
             "overlay_scale": round(overlay_scale, 2),
+            "run_on_change_enabled": settings.get("run_on_change_enabled") is True,
+            "run_on_change_delay_ms": int(math.floor(run_delay + 0.5)),
         }
 
         sections = state.get("sections")
