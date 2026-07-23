@@ -483,11 +483,18 @@ class PresetStore:
         drag_step = float(drag_step)
         if not math.isfinite(drag_step) or drag_step < 0.01 or drag_step > 100:
             raise ValueError("Full preset strength drag step must be between 0.01 and 100.")
+        overlay_scale = settings.get("overlay_scale", 0.88)
+        if isinstance(overlay_scale, bool) or not isinstance(overlay_scale, (int, float)):
+            raise ValueError("Full preset overlay scale must be numeric.")
+        overlay_scale = float(overlay_scale)
+        if not math.isfinite(overlay_scale) or overlay_scale < 0.5 or overlay_scale > 1:
+            raise ValueError("Full preset overlay scale must be between 0.5 and 1.")
         clean_settings = {
             "show_safetensors": settings.get("show_safetensors") is not False,
             "show_folder_paths": settings.get("show_folder_paths") is not False,
             "show_trigger_button": settings.get("show_trigger_button") is True,
             "strength_drag_step": round(drag_step, 2),
+            "overlay_scale": round(overlay_scale, 2),
         }
 
         sections = state.get("sections")

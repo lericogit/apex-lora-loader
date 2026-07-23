@@ -202,6 +202,7 @@ test("node display settings normalize and serialize with safe defaults", () => {
     show_folder_paths: false,
     show_trigger_button: true,
     strength_drag_step: 0.05,
+    overlay_scale: 0.75,
   };
   const normalized = normalizeState(state);
   assert.deepEqual(normalized.settings, state.settings);
@@ -209,6 +210,10 @@ test("node display settings normalize and serialize with safe defaults", () => {
 
   state.settings.strength_drag_step = 0.057;
   assert.equal(normalizeState(state).settings.strength_drag_step, 0.06);
+  state.settings.overlay_scale = 0.746;
+  assert.equal(normalizeState(state).settings.overlay_scale, 0.75);
+  state.settings.overlay_scale = 2;
+  assert.equal(normalizeState(state).settings.overlay_scale, 1);
 
   delete state.settings;
   assert.deepEqual(normalizeState(state).settings, {
@@ -216,6 +221,7 @@ test("node display settings normalize and serialize with safe defaults", () => {
     show_folder_paths: true,
     show_trigger_button: false,
     strength_drag_step: 0.01,
+    overlay_scale: 0.88,
   });
 });
 
@@ -417,6 +423,7 @@ test("full preset snapshots preserve the complete normalized setup only", () => 
     show_folder_paths: true,
     show_trigger_button: true,
     strength_drag_step: 0.057,
+    overlay_scale: 0.82,
   };
   state.sections[0].collapsed = true;
   state.sections[0].column = 1;
@@ -437,6 +444,7 @@ test("full preset snapshots preserve the complete normalized setup only", () => 
     show_folder_paths: true,
     show_trigger_button: true,
     strength_drag_step: 0.06,
+    overlay_scale: 0.82,
   });
   assert.deepEqual(snapshot.sections.map((section) => section.id), ["s1", "s2"]);
   assert.deepEqual(snapshot.sections[0].loras.map((item) => item.id), ["a", "b"]);
@@ -464,6 +472,7 @@ test("full preset application replaces the setup and selects the preset", () => 
       show_folder_paths: false,
       show_trigger_button: true,
       strength_drag_step: 0.05,
+      overlay_scale: 0.9,
     },
     sections: [
       {

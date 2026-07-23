@@ -5,6 +5,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   show_folder_paths: true,
   show_trigger_button: false,
   strength_drag_step: 0.01,
+  overlay_scale: 0.88,
 });
 
 function roundToTwo(value) {
@@ -113,12 +114,20 @@ function normalizeDragStep(value) {
     : DEFAULT_SETTINGS.strength_drag_step;
 }
 
+function normalizeOverlayScale(value) {
+  const scale = Number(value);
+  return Number.isFinite(scale)
+    ? Math.max(0.5, Math.min(1, roundToTwo(scale)))
+    : DEFAULT_SETTINGS.overlay_scale;
+}
+
 export function normalizeSettings(value) {
   return {
     show_safetensors: value?.show_safetensors !== false,
     show_folder_paths: value?.show_folder_paths !== false,
     show_trigger_button: value?.show_trigger_button === true,
     strength_drag_step: normalizeDragStep(value?.strength_drag_step),
+    overlay_scale: normalizeOverlayScale(value?.overlay_scale),
   };
 }
 

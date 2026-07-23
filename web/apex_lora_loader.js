@@ -34,14 +34,17 @@ import {
   strengthFromDrag,
   toggleSectionRows,
 } from "./state.js";
+import { createSingleOwnerController } from "./overlay_controller.js";
+import { previewDisplayName, previewSummary } from "./overlay_state.js";
 
 const NODE_CLASS = "ApexLoraLoader";
 const DATA_WIDGET = "stack_data";
-const DEFAULT_SIZE = [540, 380];
+const DEFAULT_SIZE = [420, 250];
+const PREVIEW_MIN_HEIGHT = 132;
+const STATUS_MESSAGE_DURATION_MS = 5000;
 const NODE_TITLE_COLOR = "#181c23";
 const NODE_BODY_COLOR = "#0f141a";
 const SECTION_TOGGLE_ICON_STYLE = "chevrons";
-const ZOOM_IDLE_DELAY_MS = 180;
 
 const SECTION_TOGGLE_ICON_SETS = {
   chevrons: { collapsed: "chevronRight", expanded: "chevronDown" },
@@ -53,9 +56,9 @@ let presetsCache = null;
 let metadataCache = null;
 let openPopover = null;
 let dragPayload = null;
-let zoomIdleTimer = null;
-let zoomListenerInstalled = false;
-const apexRoots = new Set();
+let editorView = null;
+let openTriggerPreview = null;
+let triggerPreviewSequence = 0;
 
 // Embedded Lucide SVG paths are ISC licensed; Feather-derived paths are MIT licensed.
 // See ../THIRD_PARTY_NOTICES.md.
@@ -105,6 +108,20 @@ const ICONS = {
       ["path", { d: "M13 19h8" }],
       ["path", { d: "m3 17 2 2 4-4" }],
       ["rect", { x: "3", y: "4", width: "6", height: "6", rx: "1" }],
+    ],
+  },
+  externalLink: {
+    className: "lucide-external-link",
+    nodes: [
+      ["path", { d: "M15 3h6v6" }],
+      ["path", { d: "M10 14 21 3" }],
+      ["path", { d: "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" }],
+    ],
+  },
+  play: {
+    className: "lucide-play",
+    nodes: [
+      ["path", { d: "M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z" }],
     ],
   },
   plus: {
@@ -209,60 +226,32 @@ const ICONS = {
   },
 };
 
+const editorController = createSingleOwnerController({
+  mount: mountNodeEditor,
+  render: renderEditor,
+  unmount: unmountNodeEditor,
+});
+
+
+function editorAnchorIsActive(node, anchor) {
+  return editorController.isOpenFor(node)
+    && Boolean(anchor?.isConnected)
+    && Boolean(editorView?.overlay?.contains(anchor));
+}
+
 
 function injectStyles() {
-  if (document.querySelector("link[data-apex-lora-styles]")) return;
-  const link = document.createElement("link");
-  link.rel = "stylesheet";
-  link.href = new URL("./apex_lora_loader.css", import.meta.url).href;
-  link.dataset.apexLoraStyles = "true";
-  document.head.appendChild(link);
-}
-
-
-function apexWidgetWrapper(root) {
-  if (!root?.isConnected) return null;
-  return root.parentElement?.classList?.contains("dom-widget")
-    ? root.parentElement
-    : root.closest?.(".dom-widget");
-}
-
-
-function setZoomLayerActive(active) {
-  for (const root of apexRoots) {
-    const wrapper = apexWidgetWrapper(root);
-    if (!wrapper) continue;
-    wrapper.classList.toggle("apex-lora-zoom-layer", active);
+  for (const [attribute, filename] of [
+    ["data-apex-lora-styles", "./apex_lora_loader.css"],
+    ["data-apex-overlay-styles", "./apex_lora_overlay.css"],
+  ]) {
+    if (document.querySelector(`link[${attribute}]`)) continue;
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = new URL(filename, import.meta.url).href;
+    link.setAttribute(attribute, "true");
+    document.head.appendChild(link);
   }
-}
-
-
-function handleCanvasWheel(event) {
-  if (!apexRoots.size) return;
-  const canvas = app.canvas?.canvas;
-  if (!canvas || (event.target !== canvas && !canvas.contains(event.target))) return;
-  setZoomLayerActive(true);
-  if (zoomIdleTimer != null) clearTimeout(zoomIdleTimer);
-  zoomIdleTimer = setTimeout(() => {
-    zoomIdleTimer = null;
-    setZoomLayerActive(false);
-  }, ZOOM_IDLE_DELAY_MS);
-}
-
-
-function installZoomPerformanceHandler() {
-  if (zoomListenerInstalled) return;
-  zoomListenerInstalled = true;
-  document.addEventListener("wheel", handleCanvasWheel, { capture: true, passive: true });
-}
-
-
-function uninstallZoomPerformanceHandler() {
-  if (!zoomListenerInstalled || apexRoots.size) return;
-  zoomListenerInstalled = false;
-  document.removeEventListener("wheel", handleCanvasWheel, true);
-  if (zoomIdleTimer != null) clearTimeout(zoomIdleTimer);
-  zoomIdleTimer = null;
 }
 
 
@@ -337,28 +326,69 @@ function hideDataWidget(widget) {
 }
 
 
+function updateStatusElement(element, message = "", error = false) {
+  if (!element) return;
+  const idleLabel = element.dataset.idleLabel || "";
+  const visibleMessage = message || idleLabel;
+  const messageElement = element.__apexMessageElement || element;
+  messageElement.textContent = visibleMessage;
+  element.classList.toggle("idle", !message);
+  element.classList.toggle("error", Boolean(message) && error);
+  element.title = message || idleLabel;
+}
+
+
 function setStatus(node, message = "", error = false) {
-  node.__apexStatus = { message, error };
-  if (node.__apexStatusElement) {
-    node.__apexStatusElement.textContent = message;
-    node.__apexStatusElement.classList.toggle("error", error);
-    node.__apexStatusElement.title = message;
+  if (node.__apexStatusTimer != null) {
+    clearTimeout(node.__apexStatusTimer);
+    node.__apexStatusTimer = null;
+  }
+  const status = { message, error };
+  node.__apexStatus = status;
+  const elements = [
+    node.__apexStatusElement,
+    editorController.isOpenFor(node) ? editorView?.statusElement : null,
+  ];
+  for (const element of elements) {
+    updateStatusElement(element, message, error);
+  }
+  const isProgress = typeof message === "string" && message.endsWith("…");
+  if (message && !error && !isProgress) {
+    node.__apexStatusTimer = setTimeout(() => {
+      node.__apexStatusTimer = null;
+      if (node.__apexStatus === status) setStatus(node, "");
+    }, STATUS_MESSAGE_DURATION_MS);
+  }
+}
+
+
+function withCanvasChange(callback) {
+  const canvas = app.canvas;
+  const transactional = typeof canvas?.emitBeforeChange === "function"
+    && typeof canvas?.emitAfterChange === "function";
+  if (transactional) canvas.emitBeforeChange();
+  try {
+    return callback();
+  } finally {
+    if (transactional) canvas.emitAfterChange();
   }
 }
 
 
 function commit(node, { presetDirty = false, fullPresetDirty = false, render = true } = {}) {
-  const selectedPreset = node.__apexPresets?.find(
-    (preset) => preset.id === node.__apexState.active_preset_id,
-  );
-  if (presetDirty || (fullPresetDirty && presetType(selectedPreset) === "full")) {
-    node.__apexState.active_preset_id = null;
-  }
-  const widget = dataWidget(node);
-  if (widget) widget.value = serializeState(node.__apexState);
-  node.graph?.change?.();
-  node.setDirtyCanvas?.(true, true);
-  if (render) renderNode(node);
+  withCanvasChange(() => {
+    const selectedPreset = node.__apexPresets?.find(
+      (preset) => preset.id === node.__apexState.active_preset_id,
+    );
+    if (presetDirty || (fullPresetDirty && presetType(selectedPreset) === "full")) {
+      node.__apexState.active_preset_id = null;
+    }
+    const widget = dataWidget(node);
+    if (widget) widget.value = serializeState(node.__apexState);
+    node.graph?.change?.();
+    node.setDirtyCanvas?.(true, true);
+    if (render) renderNode(node);
+  });
 }
 
 
@@ -411,6 +441,108 @@ function textIconButton(text, title) {
 }
 
 
+function closeTriggerPreview() {
+  if (!openTriggerPreview) return;
+  openTriggerPreview.anchor?.removeAttribute("aria-describedby");
+  openTriggerPreview.element.remove();
+  openTriggerPreview = null;
+}
+
+
+function showTriggerPreview(anchor, node, row) {
+  closeTriggerPreview();
+  if (!anchor?.isConnected || !row) return;
+  const metadata = normalizeTriggerMetadata(row);
+  if (!metadata.trigger_words.length) return;
+  const activeWords = new Set(metadata.active_trigger_words);
+  const placement = normalizeTriggerPosition(row.trigger_position);
+
+  const tooltip = document.createElement("div");
+  tooltip.className = "apex-preview-trigger-tooltip";
+  tooltip.id = `apex-trigger-preview-${++triggerPreviewSequence}`;
+  tooltip.setAttribute("role", "tooltip");
+
+  const header = document.createElement("div");
+  header.className = "apex-trigger-tooltip-header";
+  const heading = document.createElement("div");
+  heading.className = "apex-trigger-tooltip-heading";
+  const title = document.createElement("strong");
+  title.textContent = "Trigger words";
+  const identity = document.createElement("span");
+  identity.textContent = previewDisplayName(row.name, node.__apexState.settings) || row.name;
+  heading.append(title, identity);
+  const placementBadge = document.createElement("span");
+  placementBadge.className = `apex-trigger-tooltip-placement ${placement}`;
+  placementBadge.textContent = placement === "prepend" ? "Before prompt" : "After prompt";
+  header.append(heading, placementBadge);
+  tooltip.appendChild(header);
+
+  const appendGroup = (label, words, emptyText, highlightActive = false) => {
+    const group = document.createElement("div");
+    group.className = "apex-trigger-tooltip-group";
+    const groupLabel = document.createElement("span");
+    groupLabel.className = "apex-trigger-tooltip-label";
+    groupLabel.textContent = label;
+    const values = document.createElement("div");
+    values.className = "apex-trigger-tooltip-values";
+    if (!words.length) {
+      const empty = document.createElement("span");
+      empty.className = "apex-trigger-tooltip-empty";
+      empty.textContent = emptyText;
+      values.appendChild(empty);
+    } else {
+      for (const word of words) {
+        const chip = document.createElement("span");
+        chip.className = `apex-trigger-tooltip-chip${
+          highlightActive && activeWords.has(word) ? " active" : ""
+        }`;
+        chip.textContent = word;
+        values.appendChild(chip);
+      }
+    }
+    group.append(groupLabel, values);
+    tooltip.appendChild(group);
+  };
+
+  appendGroup(
+    `Active (${metadata.active_trigger_words.length})`,
+    metadata.active_trigger_words,
+    "No trigger words selected",
+    true,
+  );
+  appendGroup(
+    `All saved (${metadata.trigger_words.length})`,
+    metadata.trigger_words,
+    "No saved trigger words",
+    true,
+  );
+
+  document.body.appendChild(tooltip);
+  anchor.setAttribute("aria-describedby", tooltip.id);
+  const anchorRect = anchor.getBoundingClientRect();
+  const tooltipRect = tooltip.getBoundingClientRect();
+  const rightSpace = window.innerWidth - anchorRect.right;
+  const left = rightSpace >= tooltipRect.width + 8
+    ? anchorRect.right + 8
+    : Math.max(8, anchorRect.left - tooltipRect.width - 8);
+  const top = Math.max(
+    8,
+    Math.min(anchorRect.top - 4, window.innerHeight - tooltipRect.height - 8),
+  );
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${top}px`;
+  openTriggerPreview = { element: tooltip, anchor };
+}
+
+
+function attachTriggerPreview(anchor, node, row) {
+  anchor.addEventListener("pointerenter", () => showTriggerPreview(anchor, node, row));
+  anchor.addEventListener("pointerleave", closeTriggerPreview);
+  anchor.addEventListener("focus", () => showTriggerPreview(anchor, node, row));
+  anchor.addEventListener("blur", closeTriggerPreview);
+}
+
+
 function closeOpenPopover() {
   openPopover?.close();
   openPopover = null;
@@ -430,7 +562,8 @@ function createPopover(anchor, title, className = "") {
   close.classList.add("apex-popover-close");
   header.append(heading, close);
   panel.appendChild(header);
-  document.body.appendChild(panel);
+  const host = editorView?.overlay?.isConnected ? editorView.overlay : document.body;
+  host.appendChild(panel);
 
   const rect = anchor?.getBoundingClientRect?.() || {
     left: window.innerWidth / 2,
@@ -548,7 +681,13 @@ async function identifyNames(names, force = false) {
 async function showLoraChooser(node, anchor, sectionId, rowId = null) {
   try {
     setStatus(node, "Loading LoRA list…");
+    const loadingStatus = node.__apexStatus;
     const catalog = await loadCatalog();
+    const targetExists = rowId ? rowById(node, rowId) : sectionById(node, sectionId);
+    if (!editorAnchorIsActive(node, anchor) || !targetExists) {
+      if (node.__apexStatus === loadingStatus) setStatus(node, "");
+      return;
+    }
     const choices = catalog.loras.filter((name) =>
       matchesFolderFilters(name, node.__apexState.folder_filters),
     );
@@ -646,21 +785,24 @@ async function showLoraChooser(node, anchor, sectionId, rowId = null) {
             setStatus(node, `Identifying ${splitName(name).file}…`);
             const [identity] = await identifyNames([name]);
             if (!identity) throw new Error("The selected LoRA could not be identified.");
+            let successMessage = "";
             if (rowId) {
               const row = rowById(node, rowId);
               if (!row) return;
               Object.assign(row, identity);
               applyTriggerMetadata(row, identity);
               delete row.error;
+              successMessage = `Changed LoRA to "${splitName(identity.name).file}".`;
             } else {
               const section = sectionById(node, sectionId);
               if (!section) return;
               section.loras.push(createRow(identity));
               section.collapsed = false;
+              successMessage = `Added "${splitName(identity.name).file}" to "${section.name}".`;
             }
-            setStatus(node, "");
             commit(node, { presetDirty: true });
             close();
+            setStatus(node, successMessage);
           } catch (error) {
             item.disabled = false;
             setStatus(node, error.message, true);
@@ -688,6 +830,7 @@ async function showLoraChooser(node, anchor, sectionId, rowId = null) {
 async function showFolderChooser(node, anchor) {
   try {
     const catalog = await loadCatalog();
+    if (!editorAnchorIsActive(node, anchor)) return;
     let draft = node.__apexState.folder_filters === null
       ? null
       : [...node.__apexState.folder_filters];
@@ -794,6 +937,20 @@ function showNodeSettings(node, anchor) {
   dragStep.title = `Exact strength change per ${STRENGTH_DRAG_PIXELS_PER_TICK} horizontal pixels`;
   stepRow.append(stepLabel, dragStep);
   fields.appendChild(stepRow);
+  const scaleRow = document.createElement("label");
+  scaleRow.className = "apex-setting-row";
+  const scaleLabel = document.createElement("span");
+  scaleLabel.textContent = "Overlay scale (%)";
+  const overlayScale = document.createElement("input");
+  overlayScale.className = "apex-setting-number";
+  overlayScale.type = "number";
+  overlayScale.min = "50";
+  overlayScale.max = "100";
+  overlayScale.step = "1";
+  overlayScale.value = String(Math.round(settings.overlay_scale * 100));
+  overlayScale.title = "Scale the complete fixed editor and its popups";
+  scaleRow.append(scaleLabel, overlayScale);
+  fields.appendChild(scaleRow);
 
   const actions = document.createElement("div");
   actions.className = "apex-popover-actions";
@@ -937,6 +1094,7 @@ function showNodeSettings(node, anchor) {
     showFolderPaths.checked = DEFAULT_SETTINGS.show_folder_paths;
     showTriggerButton.checked = DEFAULT_SETTINGS.show_trigger_button;
     dragStep.value = String(DEFAULT_SETTINGS.strength_drag_step);
+    overlayScale.value = String(Math.round(DEFAULT_SETTINGS.overlay_scale * 100));
   });
   apply.addEventListener("click", () => {
     const step = Number(dragStep.value);
@@ -945,11 +1103,18 @@ function showNodeSettings(node, anchor) {
       dragStep.focus();
       return;
     }
+    const scalePercent = Number(overlayScale.value);
+    if (!Number.isFinite(scalePercent) || scalePercent < 50 || scalePercent > 100) {
+      setStatus(node, "Overlay scale must be between 50% and 100%.", true);
+      overlayScale.focus();
+      return;
+    }
     node.__apexState.settings = normalizeSettings({
       show_safetensors: showSafetensors.checked,
       show_folder_paths: showFolderPaths.checked,
       show_trigger_button: showTriggerButton.checked,
       strength_drag_step: step,
+      overlay_scale: scalePercent / 100,
     });
     commit(node, { fullPresetDirty: true });
     close();
@@ -990,8 +1155,10 @@ async function showTriggerEditor(node, anchor, rowId) {
   try {
     let row = rowById(node, rowId);
     if (!row) return;
+    let identifyingStatus = null;
     if (!/^[0-9a-f]{64}$/i.test(row.sha256) || !Number.isInteger(row.size)) {
       setStatus(node, `Identifying ${splitName(row.name).file}…`);
+      identifyingStatus = node.__apexStatus;
       const [identity] = await identifyNames([row.name]);
       if (!identity) throw new Error("The selected LoRA could not be identified.");
       Object.assign(row, identity);
@@ -1000,7 +1167,10 @@ async function showTriggerEditor(node, anchor, rowId) {
     }
 
     row = rowById(node, rowId);
-    if (!row) return;
+    if (!row || !editorAnchorIsActive(node, anchor)) {
+      if (identifyingStatus && node.__apexStatus === identifyingStatus) setStatus(node, "");
+      return;
+    }
     let draft = normalizeTriggerMetadata(row);
     let draftPosition = normalizeTriggerPosition(row.trigger_position);
     const { panel, close } = createPopover(anchor, "Trigger words", "apex-trigger-popover");
@@ -1783,6 +1953,34 @@ function setStrengthFill(input, value) {
 }
 
 
+function createStrengthInput(node, row, className = "") {
+  const input = document.createElement("input");
+  input.className = `apex-strength${className ? ` ${className}` : ""}`;
+  input.type = "text";
+  input.inputMode = "decimal";
+  input.maxLength = 7;
+  input.value = formatStrength(row.strength);
+  setStrengthFill(input, row.strength);
+  input.title = `Model strength. Drag left or right to adjust by exactly ${node.__apexState.settings.strength_drag_step} per tick; click to type.`;
+  input.setAttribute("aria-label", `Model strength for ${row.name}`);
+  input.addEventListener("change", () => {
+    if (input.classList.contains("scrubbing")) return;
+    const value = parseStrengthInput(input.value);
+    if (value === null) {
+      input.value = formatStrength(row.strength);
+      setStrengthFill(input, row.strength);
+      return;
+    }
+    row.strength = value;
+    input.value = formatStrength(row.strength);
+    setStrengthFill(input, row.strength);
+    commit(node, { presetDirty: true });
+  });
+  installStrengthDrag(node, row, input);
+  return input;
+}
+
+
 function clearDragFeedback() {
   document.querySelectorAll(".apex-drop-marker").forEach((element) => element.remove());
   document.querySelectorAll(".apex-row-drag-over, .apex-section-drag-over").forEach((element) => {
@@ -1894,28 +2092,7 @@ function buildRow(node, section, row) {
   name.appendChild(loraNameContent(row.name, node.__apexState.settings));
   name.addEventListener("click", () => showLoraChooser(node, name, section.id, row.id));
 
-  const strength = document.createElement("input");
-  strength.className = "apex-strength";
-  strength.type = "text";
-  strength.inputMode = "decimal";
-  strength.maxLength = 7;
-  strength.value = formatStrength(row.strength);
-  setStrengthFill(strength, row.strength);
-  strength.title = `Model strength. Drag left or right to adjust by exactly ${node.__apexState.settings.strength_drag_step} per tick; click to type.`;
-  strength.addEventListener("change", () => {
-    if (strength.classList.contains("scrubbing")) return;
-    const value = parseStrengthInput(strength.value);
-    if (value === null) {
-      strength.value = formatStrength(row.strength);
-      setStrengthFill(strength, row.strength);
-      return;
-    }
-    row.strength = value;
-    strength.value = formatStrength(row.strength);
-    setStrengthFill(strength, row.strength);
-    commit(node, { presetDirty: true });
-  });
-  installStrengthDrag(node, row, strength);
+  const strength = createStrengthInput(node, row);
 
   const triggerMetadata = normalizeTriggerMetadata(row);
   const triggerCount = triggerMetadata.trigger_words.length;
@@ -2193,13 +2370,14 @@ function createSectionLane(node, column) {
 
 
 function layoutSections(node) {
-  const stack = node.__apexStack;
-  const content = node.__apexStackContent;
+  const view = editorView;
+  if (!view || view.node !== node) return;
+  const { stack, content, root } = view;
   if (!stack?.isConnected || !content?.isConnected) return;
   const sectionElements = [...content.querySelectorAll(".apex-section")];
   if (!sectionElements.length) return;
 
-  const styles = getComputedStyle(node.__apexRoot);
+  const styles = getComputedStyle(root);
   const minimum = parseFloat(styles.getPropertyValue("--apex-section-min-width")) || 320;
   const maximum = parseFloat(styles.getPropertyValue("--apex-section-max-width")) || 646;
   const gap = parseFloat(styles.getPropertyValue("--apex-section-grid-gap")) || 6;
@@ -2227,17 +2405,19 @@ function layoutSections(node) {
   content.style.gridTemplateColumns = `repeat(${columnCount}, minmax(0, ${columnWidth}px))`;
   content.dataset.columns = String(columnCount);
   node.__apexColumnCount = columnCount;
-  if (Number.isFinite(node.__apexPendingScrollTop)) {
-    stack.scrollTop = node.__apexPendingScrollTop;
-    node.__apexPendingScrollTop = null;
+  if (Number.isFinite(view.pendingScrollTop)) {
+    stack.scrollTop = view.pendingScrollTop;
+    view.pendingScrollTop = null;
   }
 }
 
 
 function scheduleSectionLayout(node) {
-  if (node.__apexLayoutFrame != null) return;
-  node.__apexLayoutFrame = requestAnimationFrame(() => {
-    node.__apexLayoutFrame = null;
+  const view = editorView;
+  if (!view || view.node !== node || view.layoutFrame != null) return;
+  view.layoutFrame = requestAnimationFrame(() => {
+    if (editorView !== view) return;
+    view.layoutFrame = null;
     layoutSections(node);
   });
 }
@@ -2245,19 +2425,11 @@ function scheduleSectionLayout(node) {
 
 function suspendNodeUI(node) {
   if (node.__apexUiSuspended || !node.__apexRoot) return;
+  closeTriggerPreview();
   node.__apexUiSuspended = true;
-  node.__apexPendingScrollTop = node.__apexStack?.scrollTop ?? node.__apexPendingScrollTop ?? 0;
-  if (node.__apexLayoutFrame != null) cancelAnimationFrame(node.__apexLayoutFrame);
-  node.__apexLayoutFrame = null;
-  if (dragPayload?.node === node) {
-    dragPayload = null;
-    clearDragFeedback();
-  }
-  closeOpenPopover();
   node.__apexRoot.replaceChildren();
-  node.__apexStack = null;
-  node.__apexStackContent = null;
   node.__apexStatusElement = null;
+  node.__apexOpenButton = null;
 }
 
 
@@ -2297,18 +2469,134 @@ function installWidgetVisibilityLifecycle(node, domWidget) {
 }
 
 
-function renderNode(node) {
+function renderPreview(node, summary = previewSummary(node.__apexState)) {
   const root = node.__apexRoot;
   if (!root || !node.__apexState || node.__apexUiSuspended) return;
-  node.__apexPendingScrollTop = node.__apexStack?.scrollTop || 0;
+  if (openTriggerPreview?.anchor && root.contains(openTriggerPreview.anchor)) {
+    closeTriggerPreview();
+  }
   root.replaceChildren();
-  root.appendChild(buildToolbar(node));
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "apex-preview-toolbar";
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "apex-preview-open";
+  open.title = "Open the full Apex LoRA editor";
+  open.setAttribute("aria-label", "Open the full Apex LoRA editor");
+  open.appendChild(svgIcon("externalLink"));
+  open.addEventListener("click", () => editorController.open(node));
+  node.__apexOpenButton = open;
+
+  const metrics = document.createElement("div");
+  metrics.className = `apex-preview-summary${summary.enabledRows ? " active" : ""}`;
+  metrics.title = [
+    `${summary.sectionCount} section${summary.sectionCount === 1 ? "" : "s"}`,
+    `${summary.enabledRows} enabled LoRA${summary.enabledRows === 1 ? "" : "s"}`,
+    `${summary.totalRows} total LoRA${summary.totalRows === 1 ? "" : "s"}`,
+  ].join(", ");
+  const appendMetric = (value, label, className = "") => {
+    if (metrics.childElementCount) {
+      const separator = document.createElement("span");
+      separator.className = "apex-preview-summary-separator";
+      separator.setAttribute("aria-hidden", "true");
+      metrics.appendChild(separator);
+    }
+    const metric = document.createElement("span");
+    metric.className = `apex-preview-summary-item${className ? ` ${className}` : ""}`;
+    const number = document.createElement("strong");
+    number.textContent = String(value);
+    const text = document.createElement("span");
+    text.textContent = label;
+    metric.append(number, text);
+    metrics.appendChild(metric);
+  };
+  appendMetric(summary.sectionCount, summary.sectionCount === 1 ? "section" : "sections");
+  appendMetric(summary.enabledRows, "enabled", "enabled");
+  appendMetric(summary.totalRows, "LoRAs");
+  if (summary.errorRows) {
+    appendMetric(summary.errorRows, summary.errorRows === 1 ? "issue" : "issues", "error");
+  }
+  toolbar.append(metrics, open);
+  root.appendChild(toolbar);
+
+  const list = document.createElement("div");
+  list.className = "apex-preview-list";
+  if (!summary.rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "apex-preview-empty";
+    empty.textContent = summary.totalRows
+      ? "No LoRAs enabled"
+      : "Open the editor to build your LoRA stack";
+    list.appendChild(empty);
+  } else {
+    for (const item of summary.rows) {
+      const row = document.createElement("div");
+      row.className = `apex-preview-row${item.effective ? "" : " inactive"}${item.error ? " error" : ""}`;
+      row.setAttribute("aria-label", item.error || `${item.sectionName} / ${item.name}`);
+      const main = document.createElement("div");
+      main.className = "apex-preview-row-main";
+      const section = document.createElement("span");
+      section.className = "apex-preview-section";
+      section.textContent = item.sectionName;
+      section.title = item.sectionName;
+      const name = document.createElement("span");
+      name.className = "apex-preview-name";
+      name.textContent = previewDisplayName(item.name, node.__apexState.settings);
+      name.title = item.error || `${item.sectionName} / ${item.name}`;
+      main.append(section, name);
+      const sourceRow = rowById(node, item.id);
+      if (item.triggerWordCount && sourceRow) {
+        const trigger = document.createElement("span");
+        trigger.classList.add(
+          "apex-preview-trigger",
+          item.activeTriggerWordCount ? "active" : "saved-inactive",
+        );
+        trigger.tabIndex = 0;
+        trigger.appendChild(svgIcon("tag"));
+        const triggerNoun = item.triggerWordCount === 1 ? "trigger word" : "trigger words";
+        trigger.setAttribute("aria-label", item.activeTriggerWordCount
+          ? `${item.activeTriggerWordCount} active of ${item.triggerWordCount} saved ${triggerNoun}`
+          : `${item.triggerWordCount} saved ${triggerNoun}; none active`);
+        attachTriggerPreview(trigger, node, sourceRow);
+        main.appendChild(trigger);
+      }
+      const strength = sourceRow
+        ? createStrengthInput(node, sourceRow, "apex-preview-strength")
+        : document.createElement("span");
+      if (!sourceRow) {
+        strength.className = "apex-preview-strength";
+        strength.textContent = formatStrength(item.strength);
+      }
+      row.append(main, strength);
+      list.appendChild(row);
+    }
+    if (summary.overflow) {
+      const more = document.createElement("div");
+      more.className = "apex-preview-more";
+      more.textContent = `+${summary.overflow} more enabled`;
+      list.appendChild(more);
+    }
+  }
+  root.appendChild(list);
+
   const status = document.createElement("div");
-  status.className = `apex-status${node.__apexStatus?.error ? " error" : ""}`;
+  status.className = `apex-preview-status${node.__apexStatus?.error ? " error" : ""}`;
   status.textContent = node.__apexStatus?.message || "";
   status.title = status.textContent;
   node.__apexStatusElement = status;
   root.appendChild(status);
+}
+
+
+function renderEditor(node) {
+  const view = editorView;
+  if (!view || view.node !== node || !view.root?.isConnected || !node.__apexState) return;
+  syncEditorStage(node);
+  view.pendingScrollTop = view.stack?.scrollTop ?? view.pendingScrollTop ?? 0;
+  view.controls.replaceChildren(buildToolbar(node));
+  const root = view.root;
+  root.replaceChildren();
   const stack = document.createElement("div");
   stack.className = "apex-stack";
   const content = document.createElement("div");
@@ -2318,9 +2606,216 @@ function renderNode(node) {
   });
   stack.appendChild(content);
   root.appendChild(stack);
-  node.__apexStack = stack;
-  node.__apexStackContent = content;
+  view.stack = stack;
+  view.content = content;
   scheduleSectionLayout(node);
+}
+
+
+function renderNode(node) {
+  if (!node.__apexState) return;
+  const summary = previewSummary(node.__apexState);
+  renderPreview(node, summary);
+  if (editorController.isOpenFor(node)) renderEditor(node);
+}
+
+
+function syncEditorStage(node) {
+  const view = editorView;
+  if (!view || view.node !== node || !view.shell?.isConnected || !view.stage) return;
+  const scale = normalizeSettings(node.__apexState.settings).overlay_scale;
+  view.overlay.style.setProperty("--apex-editor-ui-scale", String(scale));
+  const width = view.shell.clientWidth;
+  const height = view.shell.clientHeight;
+  if (width > 0 && height > 0) {
+    view.stage.style.width = `${width / scale}px`;
+    view.stage.style.height = `${height / scale}px`;
+  }
+  scheduleSectionLayout(node);
+}
+
+
+function closeNodeEditor(node) {
+  const view = editorView;
+  const activeElement = document.activeElement;
+  if (
+    view?.node === node
+    && typeof activeElement?.blur === "function"
+    && (
+      view.overlay.contains(activeElement)
+      || openPopover?.panel?.contains(activeElement)
+    )
+  ) {
+    // Commit native change/blur handlers before their controls are detached.
+    activeElement.blur();
+  }
+  return editorController.close(node);
+}
+
+
+function mountNodeEditor(node) {
+  closeTriggerPreview();
+  closeOpenPopover();
+  const overlay = document.createElement("div");
+  overlay.className = "apex-editor-overlay";
+  overlay.style.setProperty(
+    "--apex-editor-ui-scale",
+    String(normalizeSettings(node.__apexState.settings).overlay_scale),
+  );
+  overlay.setAttribute("role", "dialog");
+  overlay.setAttribute("aria-modal", "true");
+  overlay.setAttribute("aria-label", "Apex LoRA Loader editor");
+
+  const shell = document.createElement("div");
+  shell.className = "apex-editor-shell";
+  const header = document.createElement("div");
+  header.className = "apex-editor-header";
+  const controls = document.createElement("div");
+  controls.className = "apex-editor-controls";
+  const status = document.createElement("div");
+  status.className = "apex-editor-status";
+  status.dataset.idleLabel = "Ready";
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  status.setAttribute("aria-atomic", "true");
+  const statusDot = document.createElement("span");
+  statusDot.className = "apex-editor-status-dot";
+  statusDot.setAttribute("aria-hidden", "true");
+  const statusMessage = document.createElement("span");
+  statusMessage.className = "apex-editor-status-message";
+  status.__apexMessageElement = statusMessage;
+  status.append(statusDot, statusMessage);
+  updateStatusElement(
+    status,
+    node.__apexStatus?.message || "",
+    node.__apexStatus?.error === true,
+  );
+  const run = document.createElement("button");
+  run.type = "button";
+  run.className = "apex-editor-run";
+  run.title = "Queue the current workflow once";
+  run.setAttribute("aria-label", "Run workflow");
+  const runLabel = document.createElement("span");
+  runLabel.textContent = "Run workflow";
+  run.append(svgIcon("play"), runLabel);
+  run.addEventListener("click", async () => {
+    if (run.disabled) return;
+    run.disabled = true;
+    run.setAttribute("aria-busy", "true");
+    setStatus(node, "Queueing workflow…");
+    try {
+      await app.queuePrompt(0, 1);
+      setStatus(node, "Workflow queued.");
+    } catch (error) {
+      setStatus(node, error?.message || "Unable to queue workflow.", true);
+    } finally {
+      run.disabled = false;
+      run.removeAttribute("aria-busy");
+    }
+  });
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "apex-editor-close";
+  close.title = "Close editor";
+  close.setAttribute("aria-label", "Close Apex LoRA editor");
+  close.appendChild(svgIcon("x"));
+  header.append(controls, status, run, close);
+
+  const root = document.createElement("div");
+  root.className = "apex-lora-root apex-editor-root";
+  root.addEventListener("pointerdown", (event) => event.stopPropagation());
+  root.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
+  const stage = document.createElement("div");
+  stage.className = "apex-editor-stage";
+  stage.append(header, root);
+  shell.appendChild(stage);
+  overlay.appendChild(shell);
+
+  const previousFocus = document.activeElement;
+  const keydown = (event) => {
+    if (event.key !== "Escape" || openPopover) return;
+    event.preventDefault();
+    closeNodeEditor(node);
+  };
+  const overlayKeydown = (event) => {
+    if (event.key === "Tab") {
+      const focusable = [...overlay.querySelectorAll(
+        'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      )].filter((element) => element.getClientRects().length > 0);
+      if (focusable.length) {
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    }
+    // The fixed editor is modal. Let controls receive the event, then prevent
+    // ComfyUI's graph-level keyboard shortcuts from acting underneath it.
+    event.stopPropagation();
+  };
+  const resizeObserver = typeof ResizeObserver === "function"
+    ? new ResizeObserver(() => syncEditorStage(node))
+    : null;
+
+  editorView = {
+    node,
+    overlay,
+    shell,
+    stage,
+    root,
+    controls,
+    statusElement: status,
+    stack: null,
+    content: null,
+    pendingScrollTop: node.__apexEditorScrollTop ?? 0,
+    layoutFrame: null,
+    resizeObserver,
+    keydown,
+    previousFocus,
+  };
+  close.addEventListener("click", () => closeNodeEditor(node));
+  overlay.addEventListener("keydown", overlayKeydown);
+  overlay.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
+  overlay.addEventListener("pointerdown", (event) => {
+    if (event.target === overlay) closeNodeEditor(node);
+  });
+  document.addEventListener("keydown", keydown, true);
+  document.body.appendChild(overlay);
+  document.body.classList.add("apex-editor-active");
+  resizeObserver?.observe(shell);
+  syncEditorStage(node);
+  setTimeout(() => close.focus({ preventScroll: true }), 0);
+}
+
+
+function unmountNodeEditor(node) {
+  const view = editorView;
+  if (!view || view.node !== node) return;
+  node.__apexEditorScrollTop = view.stack?.scrollTop ?? view.pendingScrollTop ?? 0;
+  if (view.layoutFrame != null) cancelAnimationFrame(view.layoutFrame);
+  view.resizeObserver?.disconnect();
+  document.removeEventListener("keydown", view.keydown, true);
+  if (dragPayload?.node === node) {
+    dragPayload = null;
+    clearDragFeedback();
+  }
+  closeOpenPopover();
+  view.overlay.remove();
+  document.body.classList.remove("apex-editor-active");
+  editorView = null;
+  if (!node.__apexRemoving) {
+    const focusTarget = node.__apexOpenButton?.isConnected
+      ? node.__apexOpenButton
+      : view.previousFocus?.isConnected
+        ? view.previousFocus
+        : null;
+    focusTarget?.focus?.({ preventScroll: true });
+  }
 }
 
 
@@ -2330,7 +2825,6 @@ function buildNodeUI(node) {
   if (node.color == null) node.color = NODE_TITLE_COLOR;
   if (node.bgcolor == null) node.bgcolor = NODE_BODY_COLOR;
   injectStyles();
-  installZoomPerformanceHandler();
   const widget = dataWidget(node);
   hideDataWidget(widget);
   node.__apexState = normalizeState(widget?.value);
@@ -2338,23 +2832,25 @@ function buildNodeUI(node) {
   node.__apexPresets = presetsCache || [];
 
   const root = document.createElement("div");
-  root.className = "apex-lora-root";
+  root.className = "apex-lora-preview";
   root.addEventListener("pointerdown", (event) => event.stopPropagation());
   root.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
-  const domWidget = node.addDOMWidget("apex_lora_ui", "apex-lora-ui", root, {
+  const domWidget = node.addDOMWidget("apex_lora_ui", "apex-lora-preview", root, {
     serialize: false,
     margin: 3,
-    getMinHeight: () => 190,
-    afterResize: () => scheduleSectionLayout(node),
+    getMinHeight: () => PREVIEW_MIN_HEIGHT,
   });
   // ComfyUI's DOM widget implementation otherwise performs getComputedStyle(root)
   // during every expanded canvas redraw, even when getMinHeight is provided.
-  domWidget.computeLayoutSize = () => ({ minHeight: 190, maxHeight: undefined, minWidth: 0 });
+  domWidget.computeLayoutSize = () => ({
+    minHeight: PREVIEW_MIN_HEIGHT,
+    maxHeight: undefined,
+    minWidth: 0,
+  });
   domWidget.serializeValue = () => undefined;
   node.__apexRoot = root;
   node.__apexDomWidget = domWidget;
   node.__apexUiSuspended = false;
-  apexRoots.add(root);
   installNodeCollapseLifecycle(node);
   installWidgetVisibilityLifecycle(node, domWidget);
   node.size = [
@@ -2419,7 +2915,10 @@ app.registerExtension({
       this.__apexState = normalizeState(dataWidget(this)?.value);
       const widget = dataWidget(this);
       if (widget) widget.value = serializeState(this.__apexState);
-      if (this.collapsed) suspendNodeUI(this);
+      if (this.collapsed) {
+        suspendNodeUI(this);
+        editorController.refresh(this);
+      }
       else if (this.__apexUiSuspended) resumeNodeUI(this);
       else renderNode(this);
       setTimeout(() => resolveNodeLoras(this, false), 0);
@@ -2427,21 +2926,29 @@ app.registerExtension({
     };
     const originalRemoved = nodeType.prototype.onRemoved;
     nodeType.prototype.onRemoved = function () {
-      closeOpenPopover();
+      this.__apexRemoving = true;
+      editorController.nodeRemoved(this);
       if (dragPayload?.node === this) dragPayload = null;
       clearDragFeedback();
-      if (this.__apexLayoutFrame != null) cancelAnimationFrame(this.__apexLayoutFrame);
-      this.__apexLayoutFrame = null;
-      const wrapper = apexWidgetWrapper(this.__apexRoot);
-      wrapper?.classList.remove("apex-lora-zoom-layer");
-      apexRoots.delete(this.__apexRoot);
-      uninstallZoomPerformanceHandler();
+      if (
+        openTriggerPreview?.anchor
+        && this.__apexRoot?.contains(openTriggerPreview.anchor)
+      ) {
+        closeTriggerPreview();
+      }
+      if (this.__apexStatusTimer != null) {
+        clearTimeout(this.__apexStatusTimer);
+        this.__apexStatusTimer = null;
+      }
       this.__apexRoot?.replaceChildren();
-      this.__apexStack = null;
-      this.__apexStackContent = null;
       this.__apexStatusElement = null;
+      this.__apexOpenButton = null;
       this.__apexBuilt = false;
-      return originalRemoved?.apply(this, arguments);
+      try {
+        return originalRemoved?.apply(this, arguments);
+      } finally {
+        this.__apexRemoving = false;
+      }
     };
   },
 });
