@@ -1674,6 +1674,7 @@ async function showSectionFolderSync(node, anchor, sectionId) {
     panel.appendChild(body);
     let draft = normalizeSectionSync(sectionById(node, sectionId).folder_sync);
     let busy = false;
+    let folderScrollTop = 0;
     node.__apexFolderSyncOperationToken =
       (node.__apexFolderSyncOperationToken || 0) + 1;
 
@@ -1715,6 +1716,8 @@ async function showSectionFolderSync(node, anchor, sectionId) {
       const status = sectionSyncStatus(node, sectionId);
       const activeCatalog = catalogCache || catalog;
       const dirty = !sameSectionSyncConfig(draft, live);
+      const previousFolderList = body.querySelector(".apex-folder-sync-folders");
+      if (previousFolderList) folderScrollTop = previousFolderList.scrollTop;
       body.replaceChildren();
 
       const summary = document.createElement("div");
@@ -1854,6 +1857,7 @@ async function showSectionFolderSync(node, anchor, sectionId) {
         folderList.appendChild(empty);
       }
       body.append(folderHeading, folderList);
+      folderList.scrollTop = folderScrollTop;
 
       const unavailable = [...new Set([
         ...draft.include_folders,
