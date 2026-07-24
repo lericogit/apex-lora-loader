@@ -50,6 +50,7 @@ import {
   resetSectionSyncBaseline,
   sectionSyncFolderSelectionStates,
   sectionSyncFolderTree,
+  summarizeSectionSyncDetections,
 } from "./section_sync.js";
 
 const NODE_CLASS = "ApexLoraLoader";
@@ -57,6 +58,8 @@ const DATA_WIDGET = "stack_data";
 const DEFAULT_SIZE = [420, 250];
 const PREVIEW_MIN_HEIGHT = 132;
 const STATUS_MESSAGE_DURATION_MS = 5000;
+const NATIVE_TOAST_RETRY_MS = 250;
+const NATIVE_TOAST_MAX_RETRIES = 20;
 const PRESET_JOBS_SUBMISSION_EVENT = "apex-preset-jobs/submission-state";
 const NODE_TITLE_COLOR = "#181c23";
 const NODE_BODY_COLOR = "#0f141a";
@@ -81,6 +84,13 @@ let openTriggerPreview = null;
 let triggerPreviewSequence = 0;
 let presetJobsSubmissionBusy = false;
 let autoSyncPassQueue = Promise.resolve();
+let startupSectionSyncTimer = null;
+let startupSectionSyncNodes = new Set();
+let startupSectionSyncPending = new Map();
+let lastManualDetectionToastSignature = "";
+let pendingNativeToasts = [];
+let nativeToastRetryTimer = null;
+let nativeToastRetryCount = 0;
 
 // Embedded Lucide SVG paths are ISC licensed; Feather-derived paths are MIT licensed.
 // See ../THIRD_PARTY_NOTICES.md.
@@ -1497,7 +1507,7 @@ function applySectionSyncResolution(
 }
 
 
-function showNativeToast(options) {
+function tryNativeToast(options) {
   try {
     const toast = app.extensionManager?.toast;
     if (!toast?.add) return false;
@@ -1507,6 +1517,80 @@ function showNativeToast(options) {
     console.warn("[Apex LoRA Loader] Could not show a ComfyUI toast.", error);
     return false;
   }
+}
+
+
+function scheduleNativeToastRetry() {
+  if (
+    nativeToastRetryTimer !== null
+    || !pendingNativeToasts.length
+    || nativeToastRetryCount >= NATIVE_TOAST_MAX_RETRIES
+  ) return;
+  nativeToastRetryTimer = setTimeout(() => {
+    nativeToastRetryTimer = null;
+    nativeToastRetryCount += 1;
+    const queued = pendingNativeToasts;
+    pendingNativeToasts = [];
+    for (const options of queued) {
+      if (!tryNativeToast(options)) pendingNativeToasts.push(options);
+    }
+    if (!pendingNativeToasts.length) {
+      nativeToastRetryCount = 0;
+      return;
+    }
+    if (nativeToastRetryCount >= NATIVE_TOAST_MAX_RETRIES) {
+      pendingNativeToasts = [];
+      nativeToastRetryCount = 0;
+      return;
+    }
+    scheduleNativeToastRetry();
+  }, NATIVE_TOAST_RETRY_MS);
+}
+
+
+function showNativeToast(options) {
+  if (tryNativeToast(options)) return true;
+  pendingNativeToasts.push(options);
+  scheduleNativeToastRetry();
+  return false;
+}
+
+
+function collectManualSectionSyncDetections(nodes) {
+  const detections = [];
+  for (const node of [...new Set(nodes)]) {
+    if (!node?.__apexBuilt || !node.__apexState) continue;
+    for (const section of node.__apexState.sections) {
+      const status = sectionSyncStatus(node, section.id);
+      if (
+        !status.config.enabled
+        || status.config.auto_sync
+        || !status.actionable.length
+      ) continue;
+      detections.push({
+        node,
+        section_id: section.id,
+        section_name: section.name,
+        names: [...status.actionable],
+      });
+    }
+  }
+  return detections;
+}
+
+
+function manualDetectionDetail(summary) {
+  if (!summary.count) return "";
+  const loraLabel = `${summary.count} new LoRA${summary.count === 1 ? "" : "s"} detected`;
+  if (summary.section_count === 1) {
+    return `${loraLabel} in “${summary.section_names[0]}”`;
+  }
+  const visibleNames = summary.section_names.slice(0, 3).map((name) => `“${name}”`);
+  const remaining = summary.section_count - visibleNames.length;
+  const names = remaining
+    ? `${visibleNames.join(", ")} and ${remaining} more`
+    : visibleNames.join(", ");
+  return `${loraLabel} in ${summary.section_count} sections: ${names}`;
 }
 
 
@@ -1567,9 +1651,11 @@ async function autoSyncNodeSections(node) {
 
 
 async function performAutoSyncPass(nodes) {
+  const activeNodes = [...new Set(nodes)].filter(
+    (node) => node?.__apexBuilt && node.__apexState,
+  );
   const results = [];
-  for (const node of [...new Set(nodes)]) {
-    if (!node?.__apexBuilt || !node.__apexState) continue;
+  for (const node of activeNodes) {
     try {
       results.push(...await autoSyncNodeSections(node));
     } catch (error) {
@@ -1593,50 +1679,95 @@ async function performAutoSyncPass(nodes) {
     sectionResults.map((result) => `${result.node?.id}:${result.sectionId}`),
   );
   const affectedSections = affectedSectionKeys.size;
-  if (!added && !renamed && !failed) return results;
-
-  const parts = [];
-  if (added) parts.push(
+  const autoParts = [];
+  if (added) autoParts.push(
     `Added ${added} LoRA${added === 1 ? "" : "s"} as disabled row${added === 1 ? "" : "s"}`,
   );
-  if (renamed) parts.push(`recovered ${renamed} renamed file${renamed === 1 ? "" : "s"}`);
-  let detail = parts.join(" and ");
+  if (renamed) autoParts.push(`recovered ${renamed} renamed file${renamed === 1 ? "" : "s"}`);
+  let autoDetail = autoParts.join(" and ");
   if (failed) {
-    detail += `${detail ? "; " : ""}${failed} could not be verified`;
+    autoDetail += `${autoDetail ? "; " : ""}${failed} could not be verified`;
   }
   if (affectedSections === 1) {
-    detail += ` in “${sectionResults[0].sectionName}”`;
+    autoDetail += ` in “${sectionResults[0].sectionName}”`;
   } else if (affectedSections > 1) {
-    detail += ` across ${affectedSections} sections`;
+    autoDetail += ` across ${affectedSections} sections`;
   }
-  detail += ".";
 
-  const severity = failed
-    ? added || renamed ? "warn" : "error"
-    : "success";
-  showNativeToast({
-    severity,
-    summary: failed ? "Apex Auto Sync completed with issues" : "Apex Auto Sync",
-    detail,
-    life: failed ? 10000 : 8000,
-  });
+  const manualDetections = collectManualSectionSyncDetections(activeNodes);
+  const manualSummary = summarizeSectionSyncDetections(manualDetections);
+  const manualSignature = manualSummary.count
+    ? JSON.stringify([
+        catalogRevision,
+        manualDetections.map((detection) => [
+          detection.node?.id,
+          detection.section_id,
+          detection.names,
+        ]),
+      ])
+    : "";
+  const notifyManual = Boolean(
+    manualSummary.count
+    && manualSignature !== lastManualDetectionToastSignature
+  );
+  if (!manualSummary.count) lastManualDetectionToastSignature = "";
+  else if (notifyManual) lastManualDetectionToastSignature = manualSignature;
+
+  const notificationParts = [];
+  if (autoDetail) notificationParts.push(autoDetail);
+  if (notifyManual) notificationParts.push(manualDetectionDetail(manualSummary));
+  if (notificationParts.length) {
+    const severity = failed
+      ? added || renamed ? "warn" : "error"
+      : notifyManual ? "info" : "success";
+    showNativeToast({
+      severity,
+      summary: failed
+        ? "Apex Folder Sync completed with issues"
+        : notifyManual
+          ? "Apex Folder Sync"
+          : "Apex Auto Sync",
+      detail: `${notificationParts.join(". ")}.`,
+      life: failed ? 10000 : 8000,
+    });
+  }
 
   const resultsByNode = new Map();
   for (const result of results) {
     if (!resultsByNode.has(result.node)) resultsByNode.set(result.node, []);
     resultsByNode.get(result.node).push(result);
   }
-  for (const [node, nodeResults] of resultsByNode) {
+  const manualByNode = new Map();
+  if (notifyManual) {
+    for (const detection of manualDetections) {
+      if (!manualByNode.has(detection.node)) manualByNode.set(detection.node, []);
+      manualByNode.get(detection.node).push(detection);
+    }
+  }
+  const statusNodes = new Set([
+    ...resultsByNode.keys(),
+    ...manualByNode.keys(),
+  ]);
+  for (const node of statusNodes) {
+    const nodeResults = resultsByNode.get(node) || [];
     const nodeAdded = nodeResults.reduce((total, result) => total + result.added, 0);
     const nodeRenamed = nodeResults.reduce((total, result) => total + result.renamed, 0);
     const nodeFailed = nodeResults.reduce((total, result) => total + result.failed, 0);
-    const summary = [
+    const statusParts = [
       nodeAdded ? `${nodeAdded} added` : "",
       nodeRenamed ? `${nodeRenamed} renamed` : "",
       nodeFailed ? `${nodeFailed} failed` : "",
     ].filter(Boolean).join(", ");
-    setStatus(node, `Auto-sync: ${summary}.`, nodeFailed > 0);
+    const detections = manualByNode.get(node) || [];
+    if (detections.length) {
+      const summary = summarizeSectionSyncDetections(detections);
+      statusParts.push(
+        `${summary.count} detected in ${summary.section_count} section${summary.section_count === 1 ? "" : "s"}`,
+      );
+    }
+    setStatus(node, `Folder sync: ${statusParts.join("; ")}.`, nodeFailed > 0);
   }
+  if (!notificationParts.length && !results.length) return results;
   openPopover?.refresh?.();
   return results;
 }
@@ -1651,6 +1782,64 @@ function queueAutoSyncPass(nodes) {
     console.error("[Apex LoRA Loader] Automatic folder sync failed.", error);
   });
   return run;
+}
+
+
+function scheduleStartupSectionSyncPass(node) {
+  if (node?.__apexBuilt) startupSectionSyncNodes.add(node);
+  if (
+    startupSectionSyncPending.size
+    || startupSectionSyncTimer !== null
+    || !startupSectionSyncNodes.size
+  ) return;
+  startupSectionSyncTimer = setTimeout(() => {
+    startupSectionSyncTimer = null;
+    const nodes = [...startupSectionSyncNodes];
+    startupSectionSyncNodes = new Set();
+    queueAutoSyncPass(nodes).catch((error) => {
+      console.warn("[Apex LoRA Loader] Startup folder sync did not complete.", error);
+    });
+  }, 0);
+}
+
+
+function completeNodeFolderSyncStartup(node, generation, ready) {
+  if (startupSectionSyncPending.get(node) !== generation) return;
+  startupSectionSyncPending.delete(node);
+  if (ready && node.__apexBuilt) startupSectionSyncNodes.add(node);
+  scheduleStartupSectionSyncPass();
+}
+
+
+function initializeNodeFolderSync(node) {
+  const generation = (node.__apexFolderSyncStartupGeneration || 0) + 1;
+  node.__apexFolderSyncStartupGeneration = generation;
+  startupSectionSyncPending.set(node, generation);
+  setTimeout(async () => {
+    if (!node.__apexBuilt || node.__apexFolderSyncStartupGeneration !== generation) return;
+    const catalogReady = loadCatalog().then(
+      () => ({ error: null }),
+      (error) => ({ error }),
+    );
+    await resolveNodeLoras(node, false);
+    if (!node.__apexBuilt || node.__apexFolderSyncStartupGeneration !== generation) {
+      completeNodeFolderSyncStartup(node, generation, false);
+      return;
+    }
+    const catalogResult = await catalogReady;
+    if (catalogResult.error) {
+      setStatus(node, catalogResult.error.message, true);
+      completeNodeFolderSyncStartup(node, generation, false);
+      return;
+    }
+    if (!node.__apexBuilt || node.__apexFolderSyncStartupGeneration !== generation) {
+      completeNodeFolderSyncStartup(node, generation, false);
+      return;
+    }
+    invalidateSectionSync(node);
+    refreshNodeSectionSyncStatus(node, true);
+    completeNodeFolderSyncStartup(node, generation, true);
+  }, 0);
 }
 
 
@@ -3579,26 +3768,31 @@ function buildSection(node, section) {
       ? `Add a LoRA to this section; folder sync is ${syncStatus.config.mode === "new" ? "watching for new files" : "up to date"}`
       : "Add a LoRA to this section";
   const add = iconButton("plus", addTitle, "apex-section-add");
+  const badgeGroup = document.createElement("span");
+  badgeGroup.className = "apex-section-sync-badges";
   if (syncStatus.actionable.length) {
     add.classList.add("sync-pending");
     const badge = document.createElement("span");
-    badge.className = "apex-section-sync-badge";
+    badge.className = "apex-section-sync-badge pending";
     badge.textContent = syncStatus.actionable.length > 99
       ? "99+"
       : String(syncStatus.actionable.length);
-    add.appendChild(badge);
-  } else if (autoSyncAdded) {
+    badgeGroup.appendChild(badge);
+  }
+  if (autoSyncAdded) {
     add.classList.add("sync-added");
     const badge = document.createElement("span");
     badge.className = "apex-section-sync-badge added";
     badge.textContent = autoSyncAdded > 99 ? "+99" : `+${autoSyncAdded}`;
-    add.appendChild(badge);
+    badgeGroup.appendChild(badge);
   }
+  if (badgeGroup.childElementCount) add.appendChild(badgeGroup);
   add.addEventListener("click", () => {
     if (autoSyncAdded) {
       node.__apexFolderAutoSyncAdded?.delete(section.id);
       add.classList.remove("sync-added");
       add.querySelector(".apex-section-sync-badge.added")?.remove();
+      if (!badgeGroup.childElementCount) badgeGroup.remove();
     }
     showLoraChooser(node, add, section.id);
   });
@@ -4308,12 +4502,7 @@ function buildNodeUI(node) {
     node.__apexPresets = presets;
     renderNode(node);
   }).catch((error) => setStatus(node, error.message, true));
-  loadCatalog().then(() => {
-    if (!node.__apexBuilt) return;
-    invalidateSectionSync(node);
-    refreshNodeSectionSyncStatus(node, true);
-  }).catch((error) => setStatus(node, error.message, true));
-  setTimeout(() => resolveNodeLoras(node, false), 0);
+  initializeNodeFolderSync(node);
 }
 
 
@@ -4381,7 +4570,7 @@ app.registerExtension({
       }
       else if (this.__apexUiSuspended) resumeNodeUI(this);
       else renderNode(this);
-      setTimeout(() => resolveNodeLoras(this, false), 0);
+      initializeNodeFolderSync(this);
       return result;
     };
     const originalRemoved = nodeType.prototype.onRemoved;
@@ -4406,6 +4595,11 @@ app.registerExtension({
       this.__apexFolderSyncCache = null;
       this.__apexFolderSyncErrors = null;
       this.__apexFolderAutoSyncAdded = null;
+      this.__apexFolderSyncStartupGeneration =
+        (this.__apexFolderSyncStartupGeneration || 0) + 1;
+      startupSectionSyncPending.delete(this);
+      startupSectionSyncNodes.delete(this);
+      scheduleStartupSectionSyncPass();
       this.__apexBuilt = false;
       try {
         return originalRemoved?.apply(this, arguments);

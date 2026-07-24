@@ -1029,10 +1029,10 @@
   padding: 0 3px;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgba(11, 21, 27, .8);
+  border: 1px solid rgba(48, 31, 11, .78);
   border-radius: 999px;
-  background: var(--apex-primary);
-  color: #08272a;
+  background: #d5a45f;
+  color: #2c1b08;
   font: 700 8px/1 var(--apex-code-font);
   letter-spacing: -.02em;
   pointer-events: none;
@@ -1044,8 +1044,9 @@
 }
 .apex-section-add.sync-pending {
   position: relative;
-  background: rgba(68, 166, 173, .12) !important;
-  color: var(--apex-primary-bright) !important;
+  border-color: rgba(222, 172, 101, .3) !important;
+  background: rgba(177, 115, 39, .11) !important;
+  color: #dfb879 !important;
 }
 .apex-section-add.sync-added {
   position: relative;
@@ -1053,10 +1054,15 @@
   background: rgba(68, 166, 173, .1) !important;
   color: var(--apex-primary-bright) !important;
 }
-.apex-section-sync-badge {
+.apex-section-sync-badges {
   position: absolute;
   top: -5px;
   right: -5px;
+  display: inline-flex;
+  gap: 2px;
+  pointer-events: none;
+}
+.apex-section-sync-badge {
   min-width: 14px;
   height: 14px;
   padding-inline: 2px;
@@ -1064,8 +1070,9 @@
 }
 .apex-section-sync-badge.added {
   min-width: 18px;
-  border-color: rgba(11, 21, 27, .72);
-  background: var(--apex-primary-bright);
+  border-color: rgba(7, 38, 40, .76);
+  background: #71d0d5;
+  color: #07282a;
 }
 .apex-list {
   min-height: 40px;

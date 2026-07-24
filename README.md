@@ -103,7 +103,7 @@ Each section can optionally link to one or more recursive LoRA folders from the 
 
 Detection is event-driven through workflow loading, native ComfyUI refresh, Apex's advanced rescan, and relevant stack changes—there is no polling or background hashing. A count badge appears on the section add button when files are ready. **Sync** verifies identities lazily, recovers renamed rows where possible, appends verified files in deterministic order, and leaves every new row disabled.
 
-Enable **Auto Sync** beside the Sync action to perform that same verified add-only operation after native ComfyUI refreshes and Apex advanced rescans. Automatic additions remain disabled, never trigger Run on Change, produce a native ComfyUI toast summary, and leave a temporary `+N` badge on the affected section until its Add LoRA control is opened.
+Enable **Auto Sync** beside the Sync action to perform that same verified add-only operation after workflow restoration, native ComfyUI refreshes, and Apex advanced rescans. Automatic additions remain disabled, never trigger Run on Change, produce an aggregated native ComfyUI toast summary, and leave a temporary teal `+N` badge on the affected section until its Add LoRA control is opened. Sections awaiting manual synchronization use an amber count badge and are combined into one detection toast with their section names.
 
 Synchronization is deliberately add-only. Removing, replacing, or moving a linked row records its former identity under **Ignored LoRAs**, preventing the section from immediately restoring it. Pending files can also be ignored directly, and **Allow again** makes an ignored entry eligible once more. Individual verification failures remain listed without blocking successful files.
 

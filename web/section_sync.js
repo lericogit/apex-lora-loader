@@ -313,6 +313,35 @@ export function actionableSectionSyncNames(
 }
 
 
+export function summarizeSectionSyncDetections(values) {
+  const sections = [];
+  let count = 0;
+  for (const [index, value] of (Array.isArray(values) ? values : []).entries()) {
+    const names = namesFrom(value?.names);
+    if (!names.length) continue;
+    const sectionName = typeof value?.section_name === "string"
+      && value.section_name.trim()
+      ? value.section_name.trim()
+      : "Untitled section";
+    const sectionId = typeof value?.section_id === "string" && value.section_id
+      ? value.section_id
+      : `section-${index}`;
+    sections.push({
+      section_id: sectionId,
+      section_name: sectionName,
+      count: names.length,
+    });
+    count += names.length;
+  }
+  return {
+    count,
+    section_count: sections.length,
+    section_names: sections.map((section) => section.section_name),
+    sections,
+  };
+}
+
+
 export function resetSectionSyncBaseline(config, catalogNames, folderFilters = null) {
   const normalized = normalizeSectionSync(config);
   normalized.seen_names = eligibleNamesWithNormalizedConfig(

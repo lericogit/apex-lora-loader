@@ -24,6 +24,7 @@ import {
   sectionSyncFolderSelectionStates,
   sectionSyncFolderTree,
   setSectionSyncFolderSelected,
+  summarizeSectionSyncDetections,
 } from "../web/section_sync.js";
 
 
@@ -239,6 +240,35 @@ test("new mode additionally excludes every name recorded by its baseline", () =>
     [],
     { ...config, enabled: false },
   ), []);
+});
+
+
+test("manual detection summaries aggregate LoRAs and section names without duplicates", () => {
+  assert.deepEqual(summarizeSectionSyncDetections([
+    {
+      section_id: "characters",
+      section_name: "Characters",
+      names: ["new/b.safetensors", "new/a.safetensors", "new/a.safetensors"],
+    },
+    {
+      section_id: "styles",
+      section_name: " Styles ",
+      names: ["styles/c.safetensors"],
+    },
+    {
+      section_id: "empty",
+      section_name: "Empty",
+      names: [],
+    },
+  ]), {
+    count: 3,
+    section_count: 2,
+    section_names: ["Characters", "Styles"],
+    sections: [
+      { section_id: "characters", section_name: "Characters", count: 2 },
+      { section_id: "styles", section_name: "Styles", count: 1 },
+    ],
+  });
 });
 
 
