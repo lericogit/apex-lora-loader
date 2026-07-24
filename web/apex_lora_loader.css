@@ -652,7 +652,6 @@
 }
 .apex-row.disabled .apex-lora-name {
   color: var(--apex-text-dim);
-  text-decoration: line-through;
   opacity: .68;
 }
 .apex-row.error .apex-lora-name { color: var(--apex-error); }
