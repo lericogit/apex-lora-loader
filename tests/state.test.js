@@ -57,6 +57,35 @@ test("folder filters support root, multiple folders, and recursive prefixes", ()
 });
 
 
+test("legacy sections gain disabled folder sync and serialize configured rules", () => {
+  const state = normalizeState(sampleState());
+  assert.deepEqual(state.sections[0].folder_sync, {
+    enabled: false,
+    auto_sync: false,
+    mode: "mirror",
+    include_folders: [],
+    exclude_folders: [],
+    seen_names: [],
+    ignored: [],
+  });
+  state.sections[0].folder_sync = {
+    enabled: true,
+    auto_sync: true,
+    mode: "new",
+    include_folders: ["styles"],
+    exclude_folders: ["styles/private"],
+    seen_names: ["styles/old.safetensors"],
+    ignored: [{
+      name: "styles/ignored.safetensors",
+      sha256: "f".repeat(64),
+      size: 12,
+    }],
+  };
+  const restored = normalizeState(serializeState(state));
+  assert.deepEqual(restored.sections[0].folder_sync, state.sections[0].folder_sync);
+});
+
+
 test("horizontal strength dragging is precise and clamped", () => {
   assert.equal(strengthFromDrag(1, 2.99), 1);
   assert.equal(strengthFromDrag(1, 3), 1.01);
@@ -494,6 +523,18 @@ test("full preset application replaces the setup and selects the preset", () => 
         name: "Second saved section",
         collapsed: true,
         column: 1,
+        folder_sync: {
+          enabled: true,
+          mode: "new",
+          include_folders: ["saved"],
+          exclude_folders: ["saved/private"],
+          seen_names: ["saved/B.safetensors"],
+          ignored: [{
+            name: "saved/ignored.safetensors",
+            sha256: "f".repeat(64),
+            size: 12,
+          }],
+        },
         loras: [row("saved-b", "saved/B.safetensors", "e".repeat(64), false, -0.25)],
       },
       {
@@ -522,6 +563,7 @@ test("full preset application replaces the setup and selects the preset", () => 
   assert.deepEqual(state.sections.map((section) => section.id), ["saved-two", "saved-one"]);
   assert.deepEqual(state.sections.map((section) => section.column), [1, 0]);
   assert.deepEqual(state.sections.map((section) => section.collapsed), [true, false]);
+  assert.deepEqual(state.sections[0].folder_sync, presetState.sections[0].folder_sync);
   assert.deepEqual(state.sections[0].loras.map((item) => item.id), ["saved-b"]);
   assert.equal(state.sections[0].loras[0].enabled, false);
   assert.equal(state.sections[0].loras[0].strength, -0.25);

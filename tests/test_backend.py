@@ -444,6 +444,45 @@ class BackendTests(unittest.TestCase):
                             "name": "Second",
                             "collapsed": True,
                             "column": 1,
+                            "folder_sync": {
+                                "enabled": True,
+                                "auto_sync": True,
+                                "mode": "new",
+                                "include_folders": [
+                                    "folder",
+                                    "folder\\sub\\deep",
+                                    "folder/sub/deep",
+                                ],
+                                "exclude_folders": [
+                                    "folder\\sub",
+                                    "folder/sub",
+                                ],
+                                "seen_names": [
+                                    "seen\\first.safetensors",
+                                    "seen/first.safetensors",
+                                ],
+                                "ignored": [
+                                    {
+                                        "name": "ignored\\old.safetensors",
+                                        "sha256": "c" * 64,
+                                        "size": 30,
+                                    },
+                                    {
+                                        "name": "ignored/renamed.safetensors",
+                                        "sha256": "c" * 64,
+                                        "size": 30,
+                                    },
+                                    {
+                                        "name": "ignored\\fallback.safetensors",
+                                        "sha256": "invalid",
+                                        "size": -1,
+                                    },
+                                    {
+                                        "name": "ignored/fallback.safetensors",
+                                    },
+                                ],
+                                "unknown": "discard",
+                            },
                             "unknown": "discard",
                             "loras": [
                                 {
@@ -508,6 +547,46 @@ class BackendTests(unittest.TestCase):
                 saved["state"]["sections"][0]["loras"][0]["active_trigger_words"],
                 ["detail"],
             )
+            self.assertEqual(
+                saved["state"]["sections"][0]["folder_sync"],
+                {
+                    "enabled": True,
+                    "auto_sync": True,
+                    "mode": "new",
+                    "include_folders": ["folder", "folder/sub/deep"],
+                    "exclude_folders": ["folder/sub"],
+                    "seen_names": ["seen/first.safetensors"],
+                    "ignored": [
+                        {
+                            "name": "ignored/old.safetensors",
+                            "sha256": "c" * 64,
+                            "size": 30,
+                        },
+                        {
+                            "name": "ignored/renamed.safetensors",
+                            "sha256": "c" * 64,
+                            "size": 30,
+                        },
+                        {
+                            "name": "ignored/fallback.safetensors",
+                            "sha256": "",
+                            "size": 0,
+                        },
+                    ],
+                },
+            )
+            self.assertEqual(
+                saved["state"]["sections"][1]["folder_sync"],
+                {
+                    "enabled": False,
+                    "auto_sync": False,
+                    "mode": "mirror",
+                    "include_folders": [],
+                    "exclude_folders": [],
+                    "seen_names": [],
+                    "ignored": [],
+                },
+            )
             serialized = json.dumps(saved)
             self.assertNotIn("active_preset_id", serialized)
             self.assertNotIn("unknown", serialized)
@@ -515,6 +594,132 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(store.read()["presets"], [saved])
             self.assertEqual(json.loads((tmp_path / "presets.json").read_text(encoding="utf-8"))["version"], 2)
             self.assertFalse(list(tmp_path.glob("*.tmp")))
+
+    def test_full_preset_legacy_sections_default_folder_sync_to_disabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = services.PresetStore(str(Path(directory) / "presets.json"))
+            saved = store.upsert({
+                "name": "Legacy full setup",
+                "type": "full",
+                "state": {
+                    "version": 1,
+                    "folder_filters": None,
+                    "settings": {},
+                    "sections": [{
+                        "id": "legacy-section",
+                        "name": "Legacy",
+                        "collapsed": False,
+                        "column": 0,
+                        "loras": [],
+                    }],
+                },
+            })
+
+            expected = {
+                "enabled": False,
+                "auto_sync": False,
+                "mode": "mirror",
+                "include_folders": [],
+                "exclude_folders": [],
+                "seen_names": [],
+                "ignored": [],
+            }
+            self.assertEqual(saved["state"]["sections"][0]["folder_sync"], expected)
+            self.assertEqual(
+                store.read()["presets"][0]["state"]["sections"][0]["folder_sync"],
+                expected,
+            )
+
+    def test_full_preset_accepts_large_new_only_baseline(self):
+        seen_names = [f"catalog/{index}.safetensors" for index in range(3000)]
+        with tempfile.TemporaryDirectory() as directory:
+            store = services.PresetStore(str(Path(directory) / "presets.json"))
+            saved = store.upsert({
+                "name": "Large catalog baseline",
+                "type": "full",
+                "state": {
+                    "version": 1,
+                    "folder_filters": None,
+                    "settings": {},
+                    "sections": [{
+                        "id": "section",
+                        "name": "Section",
+                        "collapsed": False,
+                        "column": 0,
+                        "folder_sync": {
+                            "enabled": True,
+                            "auto_sync": True,
+                            "mode": "new",
+                            "include_folders": [""],
+                            "exclude_folders": [],
+                            "seen_names": seen_names,
+                            "ignored": [],
+                        },
+                        "loras": [],
+                    }],
+                },
+            })
+
+            self.assertEqual(
+                saved["state"]["sections"][0]["folder_sync"]["seen_names"],
+                seen_names,
+            )
+
+    def test_full_preset_rejects_invalid_folder_sync(self):
+        valid_state = {
+            "version": 1,
+            "folder_filters": None,
+            "settings": {},
+            "sections": [{
+                "id": "section",
+                "name": "Section",
+                "collapsed": False,
+                "column": 0,
+                "loras": [],
+            }],
+        }
+        invalid_values = [
+            None,
+            [],
+            {"enabled": "yes"},
+            {"auto_sync": "yes"},
+            {"mode": "replace"},
+            {"include_folders": "folder"},
+            {"include_folders": [3]},
+            {"include_folders": ["folder/../outside"]},
+            {"exclude_folders": [None]},
+            {"seen_names": [""]},
+            {"include_folders": ["folder"], "exclude_folders": ["folder"]},
+            {"ignored": "A.safetensors"},
+            {"ignored": ["not-an-object"]},
+            {"ignored": [{"name": "", "sha256": "a" * 64, "size": 1}]},
+            {"include_folders": [f"folder/{index}" for index in range(3)]},
+            {"exclude_folders": [f"folder/{index}" for index in range(3)]},
+            {"seen_names": [f"{index}.safetensors" for index in range(3)]},
+            {
+                "ignored": [{
+                    "name": f"{index}.safetensors",
+                    "sha256": f"{index:064x}",
+                    "size": index,
+                } for index in range(3)],
+            },
+        ]
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = services.PresetStore(str(Path(directory) / "presets.json"))
+            with (
+                patch.object(services, "FOLDER_SYNC_MAX_RULES", 2),
+                patch.object(services, "FOLDER_SYNC_MAX_ITEMS", 2),
+            ):
+                for folder_sync in invalid_values:
+                    preset = {
+                        "name": "Invalid folder sync",
+                        "type": "full",
+                        "state": json.loads(json.dumps(valid_state)),
+                    }
+                    preset["state"]["sections"][0]["folder_sync"] = folder_sync
+                    with self.subTest(folder_sync=folder_sync), self.assertRaises(ValueError):
+                        store.upsert(preset)
 
     def test_preset_store_rejects_invalid_type_and_payload(self):
         with tempfile.TemporaryDirectory() as directory:

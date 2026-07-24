@@ -1,3 +1,6 @@
+import { normalizeSectionSync } from "./section_sync.js";
+
+
 export const STATE_VERSION = 1;
 export const STRENGTH_DRAG_PIXELS_PER_TICK = 3;
 export const DEFAULT_SETTINGS = Object.freeze({
@@ -152,6 +155,7 @@ export function createSection(name = "LoRAs", column = 0) {
     name,
     collapsed: false,
     column: Number.isInteger(column) && column >= 0 ? column : 0,
+    folder_sync: normalizeSectionSync(),
     loras: [],
   };
 }
@@ -208,6 +212,7 @@ export function normalizeState(value) {
         : `Section ${sectionIndex + 1}`,
       collapsed: section?.collapsed === true,
       column: Number.isInteger(section?.column) && section.column >= 0 ? section.column : null,
+      folder_sync: normalizeSectionSync(section?.folder_sync),
       loras: Array.isArray(section?.loras)
         ? section.loras.filter((row) => row && typeof row.name === "string").map((row) => ({
             id: typeof row.id === "string" ? row.id : makeId(),
@@ -238,6 +243,7 @@ export function serializeState(state) {
       name: section.name,
       collapsed: section.collapsed,
       column: Number.isInteger(section.column) && section.column >= 0 ? section.column : null,
+      folder_sync: normalizeSectionSync(section.folder_sync),
       loras: section.loras.map(({ error, ...row }) => row),
     })),
   });

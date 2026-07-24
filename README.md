@@ -25,7 +25,7 @@ Organize, filter, reorder, preset, recover, and annotate large LoRA stacks in on
 
 ## Overview
 
-Apex LoRA Loader provides MODEL-only LoRA patching with an optional prompt passthrough. It combines an ordered LoRA stack, responsive named sections, per-node folder filtering, active-state and full-setup presets, rename-safe file identities, and manually curated trigger words. The optional **Apex Preset Jobs** companion queues ordered experiments from frozen active-preset snapshots without replacing the loader's visible setup.
+Apex LoRA Loader provides MODEL-only LoRA patching with an optional prompt passthrough. It combines an ordered LoRA stack, responsive named sections, per-node folder filtering, optional per-section folder synchronization, active-state and full-setup presets, rename-safe file identities, and manually curated trigger words. The optional **Apex Preset Jobs** companion queues ordered experiments from frozen active-preset snapshots without replacing the loader's visible setup.
 
 | Port | Direction | Purpose |
 | --- | --- | --- |
@@ -46,6 +46,7 @@ The node intentionally has no CLIP socket. LoRAs are applied to `MODEL` with zer
 - Responsive manual section columns with stable placement and independent vertical stacking.
 - A polished dark interface with split toolbar islands, responsive stack metrics, and a subtle blue-teal fog surface.
 - Recursive per-node folder filters with All, None, Root, and multi-folder selection.
+- Add-only per-section folder sync with recursive rules, Mirror and New-only modes, optional automatic syncing, ignored identities, and rename-safe verification.
 - Native ComfyUI node-definition refresh support for fast LoRA filename and folder discovery.
 - Confirmed **Add all LoRAs** action for the current filtered library.
 - Installation-wide presets for either active LoRA states or complete node setups, with direct inline management from the custom preset menu.
@@ -92,6 +93,20 @@ Folder filters are stored per node and affect only the chooser:
 
 Existing rows keep loading even if their folders are later excluded from the chooser. **Add all LoRAs** adds every currently offered LoRA that is not already in the destination section after confirming the exact count and section name.
 
+### Per-section folder sync
+
+Each section can optionally link to one or more recursive LoRA folders from the Folder Sync control beside **Add all LoRAs**. Linked folders are intersected with the node-wide picker filters, while temporarily unavailable rules remain stored for later reuse.
+
+- **Folder mirror** offers every eligible catalog file missing from that section.
+- **New LoRAs only** captures the current eligible files as a baseline and offers only files discovered afterward.
+- **Off** pauses detection without discarding folder rules, the baseline, or Ignored LoRAs.
+
+Detection is event-driven through workflow loading, native ComfyUI refresh, Apex's advanced rescan, and relevant stack changes—there is no polling or background hashing. A count badge appears on the section add button when files are ready. **Sync** verifies identities lazily, recovers renamed rows where possible, appends verified files in deterministic order, and leaves every new row disabled.
+
+Enable **Auto Sync** beside the Sync action to perform that same verified add-only operation after native ComfyUI refreshes and Apex advanced rescans. Automatic additions remain disabled, never trigger Run on Change, produce a native ComfyUI toast summary, and leave a temporary `+N` badge on the affected section until its Add LoRA control is opened.
+
+Synchronization is deliberately add-only. Removing, replacing, or moving a linked row records its former identity under **Ignored LoRAs**, preventing the section from immediately restoring it. Pending files can also be ignored directly, and **Allow again** makes an ignored entry eligible once more. Individual verification failures remain listed without blocking successful files.
+
 <p align="center">
   <img src="docs/images/apex_lora_loader_img_3.png" alt="Recursive Apex LoRA folder selector with multiple selected folders" width="72%">
   <br>
@@ -115,7 +130,7 @@ The strength field visualizes the decimal portion as a continuous fill and the w
 Presets are shared by every Apex node and workflow in the same ComfyUI installation. The save dialog offers two preset types, kept in separate groups in the custom toolbar menu:
 
 - **Active LoRAs** stores only enabled LoRA identities and strengths. Applying one disables current rows, matches saved identities to rows already in the stack, and restores the matching states without changing sections, rows, or ordering.
-- **Full setup** stores folder filters, node settings, sections, columns, collapse states, every LoRA row and its order, enabled states, strengths, and trigger-word configuration. Applying one first warns that the current setup will be replaced.
+- **Full setup** stores folder filters, section folder-sync rules and baselines, node settings, sections, columns, collapse states, every LoRA row and its order, enabled states, strengths, and trigger-word configuration. Applying one first warns that the current setup will be replaced.
 
 Active LoRA matching prefers SHA-256, with exact-name fallback for entries without a usable hash. Duplicate LoRAs match one-to-one in current row order, missing entries are reported but never added, and empty presets are valid. Both preset types can be overwritten, renamed inline, or deleted directly from the menu without first applying them.
 

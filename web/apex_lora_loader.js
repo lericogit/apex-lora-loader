@@ -37,6 +37,20 @@ import {
 import { createSingleOwnerController } from "./overlay_controller.js";
 import { previewDisplayName, previewSummary } from "./overlay_state.js";
 import { activeLoraSignature, createAutoQueueController } from "./auto_queue.js";
+import {
+  addIgnoredIdentity,
+  deriveSectionSyncStatus,
+  markSectionSyncSeen,
+  normalizeSectionSync,
+  normalizeSectionSyncIdentity,
+  planVerifiedSyncCandidates,
+  reconcileIgnoredIdentities,
+  recordSectionSyncExplicitAdditions,
+  removeIgnoredIdentity,
+  resetSectionSyncBaseline,
+  sectionSyncFolderSelectionStates,
+  sectionSyncFolderTree,
+} from "./section_sync.js";
 
 const NODE_CLASS = "ApexLoraLoader";
 const DATA_WIDGET = "stack_data";
@@ -54,6 +68,10 @@ const SECTION_TOGGLE_ICON_SETS = {
 };
 
 let catalogCache = null;
+let catalogRevision = 0;
+let catalogFolderIndex = new Map();
+let catalogLoadGeneration = 0;
+let catalogLoadPromise = null;
 let presetsCache = null;
 let metadataCache = null;
 let openPopover = null;
@@ -62,6 +80,7 @@ let editorView = null;
 let openTriggerPreview = null;
 let triggerPreviewSequence = 0;
 let presetJobsSubmissionBusy = false;
+let autoSyncPassQueue = Promise.resolve();
 
 // Embedded Lucide SVG paths are ISC licensed; Feather-derived paths are MIT licensed.
 // See ../THIRD_PARTY_NOTICES.md.
@@ -154,6 +173,16 @@ const ICONS = {
       ["path", { d: "m20.772 16.852.924-.383" }],
       ["path", { d: "m20.772 19.148.924.383" }],
       ["circle", { cx: "18", cy: "18", r: "3" }],
+    ],
+  },
+  folderSync: {
+    className: "lucide-folder-sync",
+    nodes: [
+      ["path", { d: "M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v.5" }],
+      ["path", { d: "M12 10v4h4" }],
+      ["path", { d: "m12 14 1.535-1.605a5 5 0 0 1 8 1.5" }],
+      ["path", { d: "M22 22v-4h-4" }],
+      ["path", { d: "m22 18-1.535 1.605a5 5 0 0 1-8-1.5" }],
     ],
   },
   pencil: {
@@ -271,11 +300,62 @@ async function fetchJson(path, options = undefined) {
 }
 
 
-async function loadCatalog(force = false) {
-  if (force || catalogCache === null) {
-    catalogCache = await fetchJson("/apex_lora_loader/loras", { cache: "no-store" });
+function buildCatalogFolderIndex(names) {
+  const index = new Map();
+  for (const name of Array.isArray(names) ? names : []) {
+    const normalized = String(name).replaceAll("\\", "/");
+    const separator = normalized.lastIndexOf("/");
+    const folder = separator === -1 ? "" : normalized.slice(0, separator);
+    const ancestors = [""];
+    if (folder) {
+      const parts = folder.split("/");
+      for (let depth = 1; depth <= parts.length; depth += 1) {
+        ancestors.push(parts.slice(0, depth).join("/"));
+      }
+    }
+    for (const ancestor of ancestors) {
+      if (!index.has(ancestor)) index.set(ancestor, []);
+      index.get(ancestor).push(normalized);
+    }
   }
-  return catalogCache;
+  return index;
+}
+
+
+function catalogCandidatesForSectionSync(normalizedConfig) {
+  const names = new Set();
+  for (const folder of normalizedConfig?.include_folders || []) {
+    for (const name of catalogFolderIndex.get(folder) || []) names.add(name);
+  }
+  return [...names];
+}
+
+
+async function loadCatalog(force = false) {
+  if (!force && catalogCache !== null) return catalogCache;
+  if (!force && catalogLoadPromise) return catalogLoadPromise;
+
+  const generation = ++catalogLoadGeneration;
+  const request = fetchJson("/apex_lora_loader/loras", { cache: "no-store" })
+    .then((catalog) => {
+      if (generation === catalogLoadGeneration) {
+        catalogCache = catalog;
+        catalogFolderIndex = buildCatalogFolderIndex(catalog.loras);
+        catalogRevision += 1;
+      }
+      return catalog;
+    });
+  const tracked = request.finally(() => {
+    if (generation === catalogLoadGeneration && catalogLoadPromise === tracked) {
+      catalogLoadPromise = null;
+    }
+  });
+  catalogLoadPromise = tracked;
+  const catalog = await tracked;
+  if (generation !== catalogLoadGeneration) {
+    return catalogLoadPromise || catalogCache || catalog;
+  }
+  return catalog;
 }
 
 
@@ -285,12 +365,19 @@ async function refreshCatalogFromComfy() {
   // here; identity hashing and rename verification belong to the Apex rescan.
   catalogCache = null;
   try {
-    await loadCatalog(true);
+    const catalog = await loadCatalog(true);
+    refreshAllSectionSyncStatuses(catalog);
   } catch (error) {
     // Do not turn an otherwise successful native node-definition refresh into
     // a global failure. Leave the cache empty so the next chooser open retries.
     catalogCache = null;
     console.warn("[Apex LoRA Loader] Could not refresh the LoRA catalog.", error);
+    return;
+  }
+  try {
+    await queueAutoSyncPass(app.graph?._nodes || []);
+  } catch (error) {
+    console.warn("[Apex LoRA Loader] Automatic folder sync did not complete.", error);
   }
 }
 
@@ -315,6 +402,97 @@ async function loadMetadata(force = false) {
 
 function dataWidget(node) {
   return node.widgets?.find((widget) => widget.name === DATA_WIDGET);
+}
+
+
+function invalidateSectionSync(node, clearErrors = false) {
+  if (!node) return;
+  node.__apexFolderSyncRevision = (node.__apexFolderSyncRevision || 0) + 1;
+  node.__apexFolderSyncCache = null;
+  if (clearErrors) node.__apexFolderSyncErrors = new Map();
+}
+
+
+function buildSectionSyncCache(node) {
+  const sections = new Map();
+  const signature = [];
+  for (const section of node.__apexState?.sections || []) {
+    const names = catalogCandidatesForSectionSync(section.folder_sync);
+    const derived = deriveSectionSyncStatus(
+      names,
+      section.loras,
+      section.folder_sync,
+      node.__apexState.folder_filters,
+    );
+    const config = derived.config;
+    const errors = node.__apexFolderSyncErrors?.get(section.id) || new Map();
+    const actionableNames = new Set(derived.actionable);
+    const status = {
+      config: derived.config,
+      actionable: derived.actionable,
+      errors: new Map(
+        [...errors].filter(([name]) => actionableNames.has(name)),
+      ),
+    };
+    sections.set(section.id, status);
+    signature.push([
+      section.id,
+      config.enabled,
+      config.auto_sync,
+      config.mode,
+      derived.actionable,
+      config.ignored.map((entry) => [entry.name, entry.sha256]),
+    ]);
+  }
+  return {
+    catalogRevision,
+    stateRevision: node.__apexFolderSyncRevision || 0,
+    sections,
+    signature: JSON.stringify(signature),
+  };
+}
+
+
+function folderSyncCache(node) {
+  const cached = node.__apexFolderSyncCache;
+  const stateRevision = node.__apexFolderSyncRevision || 0;
+  if (
+    cached
+    && cached.catalogRevision === catalogRevision
+    && cached.stateRevision === stateRevision
+  ) {
+    return cached;
+  }
+  const next = buildSectionSyncCache(node);
+  node.__apexFolderSyncCache = next;
+  return next;
+}
+
+
+function sectionSyncStatus(node, sectionId) {
+  return folderSyncCache(node).sections.get(sectionId) || {
+    config: normalizeSectionSync(),
+    actionable: [],
+    errors: new Map(),
+  };
+}
+
+
+function refreshNodeSectionSyncStatus(node, render = true) {
+  if (!node?.__apexState) return false;
+  const previous = node.__apexFolderSyncCache?.signature || "";
+  const next = folderSyncCache(node);
+  const changed = previous !== next.signature;
+  if (render && changed && node.__apexBuilt) renderNode(node);
+  return changed;
+}
+
+
+function refreshAllSectionSyncStatuses() {
+  for (const node of app.graph?._nodes || []) {
+    if (node?.__apexState && node.__apexBuilt) refreshNodeSectionSyncStatus(node, true);
+  }
+  openPopover?.refresh?.();
 }
 
 
@@ -482,8 +660,18 @@ function withCanvasChange(callback) {
 }
 
 
-function commit(node, { presetDirty = false, fullPresetDirty = false, render = true } = {}) {
+function commit(
+  node,
+  {
+    presetDirty = false,
+    fullPresetDirty = false,
+    render = true,
+    folderSyncDirty = false,
+    clearFolderSyncErrors = false,
+  } = {},
+) {
   withCanvasChange(() => {
+    if (folderSyncDirty) invalidateSectionSync(node, clearFolderSyncErrors);
     const selectedPreset = node.__apexPresets?.find(
       (preset) => preset.id === node.__apexState.active_preset_id,
     );
@@ -753,6 +941,91 @@ function rowById(node, rowId) {
 }
 
 
+function rowIdentity(row) {
+  return {
+    name: row?.name || "",
+    sha256: row?.sha256 || "",
+    size: Number.isInteger(row?.size) ? row.size : 0,
+  };
+}
+
+
+function recordSectionSyncRemoval(section, row) {
+  const config = normalizeSectionSync(section?.folder_sync);
+  const configured = (
+    config.enabled
+    || config.include_folders.length > 0
+    || config.exclude_folders.length > 0
+    || config.seen_names.length > 0
+    || config.ignored.length > 0
+  );
+  if (!section || !configured) return false;
+  section.folder_sync = addIgnoredIdentity(config, rowIdentity(row));
+  return true;
+}
+
+
+function recordSectionSyncAddition(section, row) {
+  const config = normalizeSectionSync(section?.folder_sync);
+  if (!section) return false;
+  section.folder_sync = recordSectionSyncExplicitAdditions(
+    config,
+    [rowIdentity(row)],
+    catalogCache?.loras,
+  );
+  return true;
+}
+
+
+function allowSectionSyncIdentity(section, identity) {
+  const config = normalizeSectionSync(section?.folder_sync);
+  let next = removeIgnoredIdentity(config, identity);
+  const names = new Set(next.seen_names);
+  names.delete(identity?.name);
+  next.seen_names = [...names];
+  section.folder_sync = normalizeSectionSync(next);
+}
+
+
+function migrateSectionSyncIdentity(section, oldIdentity, nextIdentity) {
+  const config = normalizeSectionSync(section?.folder_sync);
+  let changed = false;
+  const seen = config.seen_names.map((name) => {
+    if (name !== oldIdentity?.name) return name;
+    changed = true;
+    return nextIdentity.name;
+  });
+  const ignoredMatch = config.ignored.some(
+    (entry) => entry.name === oldIdentity?.name,
+  );
+  let next = { ...config, seen_names: seen };
+  if (ignoredMatch) {
+    next = removeIgnoredIdentity(next, oldIdentity);
+    next = addIgnoredIdentity(next, nextIdentity);
+    changed = true;
+  }
+  if (changed) section.folder_sync = normalizeSectionSync(next);
+  return changed;
+}
+
+
+function moveRowWithSectionSync(node, rowId, targetSectionId, targetIndex) {
+  const source = node.__apexState.sections.find(
+    (section) => section.loras.some((row) => row.id === rowId),
+  );
+  const target = sectionById(node, targetSectionId);
+  const row = source?.loras.find((item) => item.id === rowId);
+  if (!source || !target || !row) return false;
+  const moved = moveRow(node.__apexState, rowId, targetSectionId, targetIndex);
+  if (!moved) return false;
+  if (source !== target) {
+    recordSectionSyncRemoval(source, row);
+    recordSectionSyncAddition(target, row);
+  }
+  return true;
+}
+
+
 function sameTriggerMetadata(left, right) {
   const a = normalizeTriggerMetadata(left);
   const b = normalizeTriggerMetadata(right);
@@ -805,7 +1078,9 @@ async function showLoraChooser(node, anchor, sectionId, rowId = null) {
     search.placeholder = "Search LoRAs…";
     const controls = document.createElement("div");
     controls.className = "apex-chooser-tools";
-    controls.appendChild(search);
+    const chooserActions = document.createElement("div");
+    chooserActions.className = "apex-chooser-actions";
+    controls.append(search, chooserActions);
     const list = document.createElement("div");
     list.className = "apex-list";
     panel.append(controls, list);
@@ -844,15 +1119,23 @@ async function showLoraChooser(node, anchor, sectionId, rowId = null) {
           const currentTarget = sectionById(node, sectionId);
           if (!currentTarget) throw new Error("The target section no longer exists.");
           const currentNames = new Set(currentTarget.loras.map((row) => row.name));
+          const addedRows = [];
           let added = 0;
           for (const identity of identities) {
             if (currentNames.has(identity.name)) continue;
-            currentTarget.loras.push(createRow(identity));
+            const newRow = createRow(identity);
+            currentTarget.loras.push(newRow);
+            addedRows.push(newRow);
             currentNames.add(identity.name);
             added += 1;
           }
+          currentTarget.folder_sync = recordSectionSyncExplicitAdditions(
+            currentTarget.folder_sync,
+            addedRows,
+            catalogCache?.loras,
+          );
           currentTarget.collapsed = false;
-          commit(node, { presetDirty: true });
+          commit(node, { presetDirty: true, folderSyncDirty: true });
           close();
           setStatus(node, `Added ${added} LoRA${added === 1 ? "" : "s"} to "${currentTarget.name}".`);
         } catch (error) {
@@ -862,7 +1145,30 @@ async function showLoraChooser(node, anchor, sectionId, rowId = null) {
           setStatus(node, error.message, true);
         }
       });
-      controls.appendChild(addAll);
+      chooserActions.appendChild(addAll);
+
+      const syncStatus = sectionSyncStatus(node, sectionId);
+      const folderSync = iconButton(
+        "folderSync",
+        syncStatus.config.enabled
+          ? `Manage folder sync (${syncStatus.actionable.length} pending)`
+          : "Configure folder sync for this section",
+        "apex-folder-sync-open",
+      );
+      folderSync.classList.toggle("active", syncStatus.config.enabled);
+      if (syncStatus.actionable.length) {
+        const badge = document.createElement("span");
+        badge.className = "apex-folder-sync-tool-badge";
+        badge.textContent = syncStatus.actionable.length > 99
+          ? "99+"
+          : String(syncStatus.actionable.length);
+        folderSync.appendChild(badge);
+      }
+      folderSync.addEventListener("click", () => {
+        close();
+        showSectionFolderSync(node, anchor, sectionId);
+      });
+      chooserActions.appendChild(folderSync);
     }
 
     const renderChoices = () => {
@@ -896,18 +1202,23 @@ async function showLoraChooser(node, anchor, sectionId, rowId = null) {
             if (rowId) {
               const row = rowById(node, rowId);
               if (!row) return;
+              const section = sectionById(node, sectionId);
+              if (section) recordSectionSyncRemoval(section, row);
               Object.assign(row, identity);
               applyTriggerMetadata(row, identity);
               delete row.error;
+              if (section) recordSectionSyncAddition(section, row);
               successMessage = `Changed LoRA to "${splitName(identity.name).file}".`;
             } else {
               const section = sectionById(node, sectionId);
               if (!section) return;
-              section.loras.push(createRow(identity));
+              const newRow = createRow(identity);
+              section.loras.push(newRow);
+              recordSectionSyncAddition(section, newRow);
               section.collapsed = false;
               successMessage = `Added "${splitName(identity.name).file}" to "${section.name}".`;
             }
-            commit(node, { presetDirty: true });
+            commit(node, { presetDirty: true, folderSyncDirty: true });
             close();
             setStatus(node, successMessage);
           } catch (error) {
@@ -998,10 +1309,854 @@ async function showFolderChooser(node, anchor) {
       node.__apexState.folder_filters = draft === null
         ? null
         : [...new Set(draft)].sort((a, b) => a.localeCompare(b));
-      commit(node, { fullPresetDirty: true });
+      commit(node, { fullPresetDirty: true, folderSyncDirty: true });
       close();
     });
     renderFolders();
+  } catch (error) {
+    setStatus(node, error.message, true);
+  }
+}
+
+
+function sameSectionSyncConfig(left, right) {
+  return JSON.stringify(normalizeSectionSync(left)) === JSON.stringify(normalizeSectionSync(right));
+}
+
+
+function folderIsWithin(folder, parent) {
+  return parent === "" || folder === parent || folder.startsWith(`${parent}/`);
+}
+
+
+function folderAllowedByNodeFilters(folder, filters) {
+  if (filters === null) return true;
+  if (!Array.isArray(filters) || !filters.length) return false;
+  return filters.some((filter) => {
+    if (filter === "") return folder === "";
+    return folder === filter || folder.startsWith(`${filter}/`);
+  });
+}
+
+
+function folderVisibleUnderNodeFilters(folder, filters) {
+  if (folderAllowedByNodeFilters(folder, filters)) return true;
+  if (filters === null || !Array.isArray(filters)) return filters === null;
+  return filters.some((filter) => (
+    filter !== ""
+    && (folder === "" || filter.startsWith(`${folder}/`))
+  ));
+}
+
+
+function setFolderSyncSubtree(config, folder, selected) {
+  const next = normalizeSectionSync(config);
+  next.include_folders = next.include_folders.filter(
+    (value) => !folderIsWithin(value, folder),
+  );
+  next.exclude_folders = next.exclude_folders.filter(
+    (value) => !folderIsWithin(value, folder),
+  );
+  (selected ? next.include_folders : next.exclude_folders).push(folder);
+  return normalizeSectionSync(next);
+}
+
+
+async function resolveSectionSyncNames(names, onProgress = null) {
+  const entries = [];
+  const errors = [];
+  for (let index = 0; index < names.length; index += 512) {
+    const batch = names.slice(index, index + 512);
+    try {
+      const data = await fetchJson("/apex_lora_loader/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entries: batch.map((name, batchIndex) => ({
+            id: `folder-sync-${index + batchIndex}`,
+            name,
+            sha256: "",
+            size: 0,
+          })),
+          force: false,
+        }),
+      });
+      entries.push(...(data.entries || []));
+      errors.push(...(data.errors || []));
+    } catch (error) {
+      errors.push(...batch.map((name) => ({ name, error: error.message })));
+    }
+    if (
+      onProgress?.(Math.min(index + batch.length, names.length), names.length)
+      === false
+    ) {
+      break;
+    }
+  }
+  if (entries.length) metadataCache = null;
+  return { entries, errors };
+}
+
+
+function applySectionSyncResolution(
+  node,
+  sectionId,
+  names,
+  resolved,
+  catalogNames,
+  automatic = false,
+) {
+  const section = sectionById(node, sectionId);
+  if (!section) return { aborted: true, added: 0, renamed: 0, failed: 0 };
+  const plan = planVerifiedSyncCandidates(
+    names,
+    resolved.entries,
+    section.loras,
+    section.folder_sync,
+    catalogNames,
+  );
+  const fullIdentities = new Map(
+    resolved.entries.map((identity) => [identity.name, identity]),
+  );
+  const acknowledged = [];
+  let renamed = 0;
+  for (const rename of plan.renames) {
+    const row = section.loras.find((item) => item.id === rename.row_id);
+    const identity = fullIdentities.get(rename.identity.name) || rename.identity;
+    const normalizedIdentity = normalizeSectionSyncIdentity(identity);
+    if (!row || !normalizedIdentity) continue;
+    const previous = rowIdentity(row);
+    row.name = normalizedIdentity.name;
+    row.sha256 = normalizedIdentity.sha256;
+    row.size = normalizedIdentity.size;
+    applyTriggerMetadata(row, identity);
+    delete row.error;
+    migrateSectionSyncIdentity(section, previous, rowIdentity(row));
+    acknowledged.push(normalizedIdentity.name);
+    renamed += 1;
+  }
+  let added = 0;
+  for (const addition of plan.additions) {
+    const identity = fullIdentities.get(addition.name) || addition;
+    const row = createRow(identity);
+    row.enabled = false;
+    section.loras.push(row);
+    acknowledged.push(identity.name);
+    added += 1;
+  }
+  const ignoredIdentities = [];
+  for (const skipped of plan.skipped) {
+    const identity = fullIdentities.get(skipped.name);
+    if (skipped.reason === "ignored" && identity) {
+      ignoredIdentities.push(identity);
+      acknowledged.push(identity.name);
+    } else if (skipped.reason === "existing") {
+      acknowledged.push(skipped.name);
+    }
+  }
+  if (ignoredIdentities.length) {
+    section.folder_sync = reconcileIgnoredIdentities(
+      section.folder_sync,
+      ignoredIdentities,
+      catalogNames,
+    );
+  }
+  let config = normalizeSectionSync(section.folder_sync);
+  if (config.mode === "new") config = markSectionSyncSeen(config, acknowledged);
+  section.folder_sync = config;
+
+  const errors = new Map();
+  for (const error of resolved.errors) {
+    if (typeof error?.name === "string") {
+      errors.set(error.name, error.error || "Unable to identify this LoRA.");
+    }
+  }
+  for (const skipped of plan.skipped) {
+    if (skipped.reason === "unverified" && !errors.has(skipped.name)) {
+      errors.set(skipped.name, "Unable to verify this LoRA.");
+    }
+  }
+  if (!node.__apexFolderSyncErrors) node.__apexFolderSyncErrors = new Map();
+  node.__apexFolderSyncErrors.set(sectionId, errors);
+  if (automatic && added) {
+    if (!node.__apexFolderAutoSyncAdded) node.__apexFolderAutoSyncAdded = new Map();
+    node.__apexFolderAutoSyncAdded.set(
+      sectionId,
+      (node.__apexFolderAutoSyncAdded.get(sectionId) || 0) + added,
+    );
+  }
+  commit(node, { fullPresetDirty: true, folderSyncDirty: true });
+  return {
+    aborted: false,
+    sectionId,
+    sectionName: section.name,
+    added,
+    renamed,
+    failed: errors.size,
+  };
+}
+
+
+function showNativeToast(options) {
+  try {
+    const toast = app.extensionManager?.toast;
+    if (!toast?.add) return false;
+    toast.add(options);
+    return true;
+  } catch (error) {
+    console.warn("[Apex LoRA Loader] Could not show a ComfyUI toast.", error);
+    return false;
+  }
+}
+
+
+async function autoSyncNodeSections(node) {
+  const results = [];
+  if (!node?.__apexBuilt || !node.__apexState || !catalogCache) return results;
+  const sectionIds = node.__apexState.sections.map((section) => section.id);
+  for (const sectionId of sectionIds) {
+    const section = sectionById(node, sectionId);
+    if (!section) continue;
+    const status = sectionSyncStatus(node, sectionId);
+    if (
+      !status.config.enabled
+      || !status.config.auto_sync
+      || !status.actionable.length
+    ) continue;
+
+    const names = [...status.actionable];
+    const stateRevision = node.__apexFolderSyncRevision || 0;
+    const activeCatalogRevision = catalogRevision;
+    setStatus(
+      node,
+      `Auto-sync verifying ${names.length} LoRA${names.length === 1 ? "" : "s"} for “${section.name}”…`,
+    );
+    const resolved = await resolveSectionSyncNames(
+      names,
+      (completed, total) => {
+        if (
+          !node.__apexBuilt
+          || sectionById(node, sectionId) !== section
+          || (node.__apexFolderSyncRevision || 0) !== stateRevision
+          || catalogRevision !== activeCatalogRevision
+        ) return false;
+        setStatus(node, `Auto-sync verifying LoRAs ${completed}/${total}…`);
+        return true;
+      },
+    );
+    if (
+      !node.__apexBuilt
+      || sectionById(node, sectionId) !== section
+      || (node.__apexFolderSyncRevision || 0) !== stateRevision
+      || catalogRevision !== activeCatalogRevision
+    ) {
+      continue;
+    }
+    const result = applySectionSyncResolution(
+      node,
+      sectionId,
+      names,
+      resolved,
+      catalogCache.loras,
+      true,
+    );
+    if (!result.aborted) results.push({ ...result, node });
+  }
+  return results;
+}
+
+
+async function performAutoSyncPass(nodes) {
+  const results = [];
+  for (const node of [...new Set(nodes)]) {
+    if (!node?.__apexBuilt || !node.__apexState) continue;
+    try {
+      results.push(...await autoSyncNodeSections(node));
+    } catch (error) {
+      setStatus(node, error?.message || "Automatic folder sync failed.", true);
+      results.push({
+        node,
+        sectionId: null,
+        sectionName: "",
+        added: 0,
+        renamed: 0,
+        failed: 1,
+      });
+    }
+  }
+
+  const added = results.reduce((total, result) => total + result.added, 0);
+  const renamed = results.reduce((total, result) => total + result.renamed, 0);
+  const failed = results.reduce((total, result) => total + result.failed, 0);
+  const sectionResults = results.filter((result) => result.sectionId);
+  const affectedSectionKeys = new Set(
+    sectionResults.map((result) => `${result.node?.id}:${result.sectionId}`),
+  );
+  const affectedSections = affectedSectionKeys.size;
+  if (!added && !renamed && !failed) return results;
+
+  const parts = [];
+  if (added) parts.push(
+    `Added ${added} LoRA${added === 1 ? "" : "s"} as disabled row${added === 1 ? "" : "s"}`,
+  );
+  if (renamed) parts.push(`recovered ${renamed} renamed file${renamed === 1 ? "" : "s"}`);
+  let detail = parts.join(" and ");
+  if (failed) {
+    detail += `${detail ? "; " : ""}${failed} could not be verified`;
+  }
+  if (affectedSections === 1) {
+    detail += ` in “${sectionResults[0].sectionName}”`;
+  } else if (affectedSections > 1) {
+    detail += ` across ${affectedSections} sections`;
+  }
+  detail += ".";
+
+  const severity = failed
+    ? added || renamed ? "warn" : "error"
+    : "success";
+  showNativeToast({
+    severity,
+    summary: failed ? "Apex Auto Sync completed with issues" : "Apex Auto Sync",
+    detail,
+    life: failed ? 10000 : 8000,
+  });
+
+  const resultsByNode = new Map();
+  for (const result of results) {
+    if (!resultsByNode.has(result.node)) resultsByNode.set(result.node, []);
+    resultsByNode.get(result.node).push(result);
+  }
+  for (const [node, nodeResults] of resultsByNode) {
+    const nodeAdded = nodeResults.reduce((total, result) => total + result.added, 0);
+    const nodeRenamed = nodeResults.reduce((total, result) => total + result.renamed, 0);
+    const nodeFailed = nodeResults.reduce((total, result) => total + result.failed, 0);
+    const summary = [
+      nodeAdded ? `${nodeAdded} added` : "",
+      nodeRenamed ? `${nodeRenamed} renamed` : "",
+      nodeFailed ? `${nodeFailed} failed` : "",
+    ].filter(Boolean).join(", ");
+    setStatus(node, `Auto-sync: ${summary}.`, nodeFailed > 0);
+  }
+  openPopover?.refresh?.();
+  return results;
+}
+
+
+function queueAutoSyncPass(nodes) {
+  const requestedNodes = [...new Set(Array.isArray(nodes) ? nodes : [])];
+  const run = autoSyncPassQueue
+    .catch(() => {})
+    .then(() => performAutoSyncPass(requestedNodes));
+  autoSyncPassQueue = run.catch((error) => {
+    console.error("[Apex LoRA Loader] Automatic folder sync failed.", error);
+  });
+  return run;
+}
+
+
+async function showSectionFolderSync(node, anchor, sectionId) {
+  try {
+    setStatus(node, "Loading folder sync…");
+    const loadingStatus = node.__apexStatus;
+    const catalog = await loadCatalog();
+    if (!editorAnchorIsActive(node, anchor) || !sectionById(node, sectionId)) {
+      if (node.__apexStatus === loadingStatus) setStatus(node, "");
+      return;
+    }
+    refreshNodeSectionSyncStatus(node, false);
+    const { panel } = createPopover(
+      anchor,
+      "Section folder sync",
+      "apex-folder-sync-popover",
+    );
+    const body = document.createElement("div");
+    body.className = "apex-folder-sync-body";
+    panel.appendChild(body);
+    let draft = normalizeSectionSync(sectionById(node, sectionId).folder_sync);
+    let busy = false;
+    node.__apexFolderSyncOperationToken =
+      (node.__apexFolderSyncOperationToken || 0) + 1;
+
+    const beginOperation = () => {
+      const section = sectionById(node, sectionId);
+      const token = (node.__apexFolderSyncOperationToken || 0) + 1;
+      node.__apexFolderSyncOperationToken = token;
+      return {
+        token,
+        section,
+        stateRevision: node.__apexFolderSyncRevision || 0,
+        catalogRevision,
+      };
+    };
+
+    const operationIsCurrent = (operation) => (
+      Boolean(operation?.section)
+      && panel.isConnected
+      && node.__apexFolderSyncOperationToken === operation.token
+      && sectionById(node, sectionId) === operation.section
+      && (node.__apexFolderSyncRevision || 0) === operation.stateRevision
+      && catalogRevision === operation.catalogRevision
+    );
+
+    const abandonOperation = (operation, status = null) => {
+      if (node.__apexFolderSyncOperationToken === operation?.token) busy = false;
+      if (status && node.__apexStatus === status) setStatus(node, "");
+      if (panel.isConnected) renderPanel();
+    };
+
+    const renderPanel = () => {
+      if (!panel.isConnected) return;
+      const section = sectionById(node, sectionId);
+      if (!section) {
+        closeOpenPopover();
+        return;
+      }
+      const live = normalizeSectionSync(section.folder_sync);
+      const status = sectionSyncStatus(node, sectionId);
+      const activeCatalog = catalogCache || catalog;
+      const dirty = !sameSectionSyncConfig(draft, live);
+      body.replaceChildren();
+
+      const summary = document.createElement("div");
+      summary.className = "apex-folder-sync-summary";
+      const summaryText = document.createElement("div");
+      summaryText.className = "apex-folder-sync-summary-copy";
+      const summaryTitle = document.createElement("strong");
+      summaryTitle.textContent = live.enabled
+        ? live.mode === "new"
+          ? "New LoRAs only"
+          : "Folder mirror"
+        : "Folder sync off";
+      const summaryDetail = document.createElement("span");
+      summaryDetail.textContent = live.enabled
+        ? `${live.include_folders.length} linked · ${live.exclude_folders.length} excluded · ${status.actionable.length} pending${live.auto_sync ? " · auto" : ""}`
+        : `${live.include_folders.length} linked folder${live.include_folders.length === 1 ? "" : "s"} retained while paused`;
+      summaryDetail.title = [
+        live.include_folders.length
+          ? `Linked: ${live.include_folders.map((folder) => folder || "(LoRA root)").join(", ")}`
+          : "No linked folders",
+        live.exclude_folders.length
+          ? `Excluded: ${live.exclude_folders.map((folder) => folder || "(LoRA root)").join(", ")}`
+          : "",
+      ].filter(Boolean).join("\n");
+      summaryText.append(summaryTitle, summaryDetail);
+      const summaryCount = document.createElement("span");
+      summaryCount.className = `apex-folder-sync-count${status.actionable.length ? " active" : ""}`;
+      summaryCount.textContent = String(status.actionable.length);
+      summaryCount.title = "LoRAs ready to synchronize";
+      summary.append(summaryText, summaryCount);
+      body.appendChild(summary);
+
+      const modeLabel = document.createElement("span");
+      modeLabel.className = "apex-folder-sync-label";
+      modeLabel.textContent = "Behavior";
+      const modes = document.createElement("div");
+      modes.className = "apex-folder-sync-modes";
+      const activeMode = draft.enabled ? draft.mode : "off";
+      for (const [value, label, title] of [
+        ["off", "Off", "Pause detection while retaining this setup"],
+        ["mirror", "Folder mirror", "Offer every linked-folder LoRA missing from this section"],
+        ["new", "New LoRAs only", "Offer only LoRAs discovered after the baseline"],
+      ]) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = label;
+        button.title = title;
+        button.className = activeMode === value ? "active" : "";
+        button.disabled = busy;
+        button.addEventListener("click", () => {
+          if (value === "off") draft.enabled = false;
+          else {
+            draft.enabled = true;
+            draft.mode = value;
+          }
+          draft = normalizeSectionSync(draft);
+          renderPanel();
+        });
+        modes.appendChild(button);
+      }
+      body.append(modeLabel, modes);
+
+      const folderHeading = document.createElement("div");
+      folderHeading.className = "apex-folder-sync-heading";
+      const folderLabel = document.createElement("span");
+      folderLabel.className = "apex-folder-sync-label";
+      folderLabel.textContent = "Linked folders";
+      const folderHint = document.createElement("small");
+      folderHint.textContent = "Parents include future subfolders; child choices override them";
+      folderHeading.append(folderLabel, folderHint);
+      const folderList = document.createElement("div");
+      folderList.className = "apex-folder-sync-folders";
+      const configuredFolders = new Set([
+        ...draft.include_folders,
+        ...draft.exclude_folders,
+      ]);
+      const folderTree = sectionSyncFolderTree([...new Set([
+        ...(activeCatalog.folders || []).filter((folder) => (
+          folderVisibleUnderNodeFilters(folder, node.__apexState.folder_filters)
+        )),
+        ...configuredFolders,
+      ])]);
+      const visibleFolders = folderTree.map(({ folder }) => folder);
+      const folderDepths = new Map(
+        folderTree.map(({ folder, depth }) => [folder, depth]),
+      );
+      const selectionStates = sectionSyncFolderSelectionStates(visibleFolders, draft);
+      const visibleFolderSet = new Set(visibleFolders);
+      const mixedFolders = new Set();
+      for (const folder of visibleFolders) {
+        const selected = selectionStates.get(folder) === true;
+        let ancestor = folder;
+        while (ancestor) {
+          const separator = ancestor.lastIndexOf("/");
+          ancestor = separator === -1 ? "" : ancestor.slice(0, separator);
+          if (
+            visibleFolderSet.has(ancestor)
+            && (selectionStates.get(ancestor) === true) !== selected
+          ) {
+            mixedFolders.add(ancestor);
+          }
+        }
+      }
+      for (const folder of visibleFolders) {
+        const allowed = folderAllowedByNodeFilters(
+          folder,
+          node.__apexState.folder_filters,
+        );
+        const selected = selectionStates.get(folder) === true;
+        const mixed = mixedFolders.has(folder);
+        const row = document.createElement("label");
+        row.className = `apex-folder-sync-folder${allowed ? "" : " filtered"}`;
+        row.style.paddingLeft = `${7 + (folderDepths.get(folder) || 0) * 15}px`;
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = selected;
+        checkbox.indeterminate = mixed;
+        checkbox.disabled = busy || (!allowed && !configuredFolders.has(folder));
+        const name = document.createElement("span");
+        name.textContent = folder || "(LoRA root)";
+        name.title = allowed
+          ? folder || "The complete LoRA folder"
+          : configuredFolders.has(folder)
+            ? "Stored rule; currently outside the node-wide folder filters"
+            : "Unavailable under the node-wide folder filters";
+        checkbox.addEventListener("change", () => {
+          draft = setFolderSyncSubtree(draft, folder, checkbox.checked);
+          renderPanel();
+        });
+        row.append(checkbox, name);
+        folderList.appendChild(row);
+      }
+      if (!visibleFolders.length) {
+        const empty = document.createElement("div");
+        empty.className = "apex-empty";
+        empty.textContent = "No folders are available under the node-wide folder filters.";
+        folderList.appendChild(empty);
+      }
+      body.append(folderHeading, folderList);
+
+      const unavailable = [...new Set([
+        ...draft.include_folders,
+        ...draft.exclude_folders,
+      ])].filter((folder) => (
+        !(activeCatalog.folders || []).includes(folder)
+        || !folderVisibleUnderNodeFilters(folder, node.__apexState.folder_filters)
+      ));
+      if (unavailable.length) {
+        const warning = document.createElement("div");
+        warning.className = "apex-folder-sync-warning";
+        warning.textContent = `${unavailable.length} stored folder rule${unavailable.length === 1 ? " is" : "s are"} currently missing or outside the node-wide filters.`;
+        body.appendChild(warning);
+      }
+
+      const configActions = document.createElement("div");
+      configActions.className = "apex-folder-sync-config-actions";
+      const configState = document.createElement("div");
+      configState.className = `apex-folder-sync-config-state${dirty ? " dirty" : ""}`;
+      const configStateLabel = document.createElement("strong");
+      configStateLabel.textContent = "Configuration";
+      const configStateValue = document.createElement("span");
+      configStateValue.textContent = dirty ? "Unsaved changes" : "Saved";
+      configState.append(configStateLabel, configStateValue);
+      const configButtons = document.createElement("div");
+      configButtons.className = "apex-folder-sync-config-buttons";
+      const reset = document.createElement("button");
+      reset.type = "button";
+      reset.className = "apex-danger-action";
+      reset.textContent = "Clear setup";
+      reset.disabled = busy || !(
+        live.enabled
+        || live.auto_sync
+        || live.include_folders.length
+        || live.exclude_folders.length
+        || live.seen_names.length
+        || live.ignored.length
+      );
+      reset.addEventListener("click", () => {
+        if (!window.confirm(
+          `Clear folder sync for “${section.name}”? This removes its folder rules, New-only baseline, and Ignored LoRAs.`,
+        )) return;
+        const current = sectionById(node, sectionId);
+        if (!current) return;
+        current.folder_sync = normalizeSectionSync();
+        draft = normalizeSectionSync();
+        node.__apexFolderSyncErrors?.delete(sectionId);
+        commit(node, { fullPresetDirty: true, folderSyncDirty: true });
+        setStatus(node, `Cleared folder sync for “${current.name}”.`);
+        renderPanel();
+      });
+      const apply = document.createElement("button");
+      apply.type = "button";
+      apply.className = "apex-primary-action";
+      apply.textContent = "Apply changes";
+      apply.disabled = busy || !dirty || (
+        draft.enabled && draft.include_folders.length === 0
+      );
+      apply.title = draft.enabled && draft.include_folders.length === 0
+        ? "Select at least one folder before enabling synchronization"
+        : "Save this section’s folder-sync configuration";
+      apply.addEventListener("click", () => {
+        const current = sectionById(node, sectionId);
+        if (!current) return;
+        const previous = normalizeSectionSync(current.folder_sync);
+        let next = normalizeSectionSync(draft);
+        const rulesChanged = (
+          JSON.stringify(previous.include_folders) !== JSON.stringify(next.include_folders)
+          || JSON.stringify(previous.exclude_folders) !== JSON.stringify(next.exclude_folders)
+          || (next.mode === "new" && previous.mode !== "new")
+        );
+        if (next.mode === "new" && rulesChanged) {
+          next = resetSectionSyncBaseline(
+            next,
+            activeCatalog.loras,
+            node.__apexState.folder_filters,
+          );
+        }
+        current.folder_sync = next;
+        draft = normalizeSectionSync(next);
+        node.__apexFolderSyncErrors?.delete(sectionId);
+        commit(node, { fullPresetDirty: true, folderSyncDirty: true });
+        setStatus(node, `Updated folder sync for “${current.name}”.`);
+        renderPanel();
+      });
+      configButtons.append(reset, apply);
+      configActions.append(configState, configButtons);
+      body.appendChild(configActions);
+
+      const pendingPanel = document.createElement("section");
+      pendingPanel.className = "apex-folder-sync-pending";
+      const pendingHeading = document.createElement("div");
+      pendingHeading.className = "apex-folder-sync-heading apex-folder-sync-pending-heading";
+      const pendingTitle = document.createElement("div");
+      pendingTitle.className = "apex-folder-sync-pending-title";
+      const pendingLabel = document.createElement("span");
+      pendingLabel.className = "apex-folder-sync-label";
+      pendingLabel.textContent = live.mode === "new" ? "New LoRAs" : "Missing LoRAs";
+      const pendingCount = document.createElement("span");
+      pendingCount.className = `apex-folder-sync-pending-count${status.actionable.length ? " active" : ""}`;
+      pendingCount.textContent = `${status.actionable.length} pending`;
+      pendingTitle.append(pendingLabel, pendingCount);
+      const sync = document.createElement("button");
+      sync.type = "button";
+      sync.className = "apex-folder-sync-run apex-primary-action";
+      sync.textContent = busy ? "Syncing…" : "Sync";
+      sync.disabled = busy || dirty || !live.enabled || status.actionable.length === 0;
+      const pendingActions = document.createElement("div");
+      pendingActions.className = "apex-folder-sync-pending-actions";
+      const autoSync = document.createElement("label");
+      autoSync.className = "apex-folder-sync-auto";
+      const autoSyncInput = document.createElement("input");
+      autoSyncInput.type = "checkbox";
+      autoSyncInput.checked = live.auto_sync;
+      autoSyncInput.disabled = busy || dirty || !live.enabled;
+      const autoSyncTrack = document.createElement("span");
+      autoSyncTrack.className = "apex-folder-sync-auto-track";
+      const autoSyncLabel = document.createElement("span");
+      autoSyncLabel.textContent = "Auto";
+      autoSync.title = dirty
+        ? "Apply the pending configuration changes before changing Auto Sync"
+        : live.enabled
+          ? "Automatically verify and add detected LoRAs as disabled rows after a refresh"
+          : "Enable folder sync before enabling Auto Sync";
+      autoSyncInput.addEventListener("change", () => {
+        const current = sectionById(node, sectionId);
+        if (!current) return;
+        const next = normalizeSectionSync(current.folder_sync);
+        next.auto_sync = autoSyncInput.checked;
+        current.folder_sync = normalizeSectionSync(next);
+        draft = normalizeSectionSync(current.folder_sync);
+        commit(node, { fullPresetDirty: true, folderSyncDirty: true });
+        setStatus(
+          node,
+          autoSyncInput.checked
+            ? `Auto Sync enabled for “${current.name}”.`
+            : `Auto Sync disabled for “${current.name}”.`,
+        );
+        renderPanel();
+      });
+      autoSync.append(autoSyncInput, autoSyncTrack, autoSyncLabel);
+      pendingActions.append(autoSync, sync);
+      pendingHeading.append(pendingTitle, pendingActions);
+      const pendingList = document.createElement("div");
+      pendingList.className = "apex-folder-sync-items apex-folder-sync-pending-list";
+      if (!status.actionable.length) {
+        const empty = document.createElement("div");
+        empty.className = "apex-folder-sync-empty";
+        empty.textContent = live.enabled
+          ? "This section is up to date."
+          : "Enable a mode and apply it to begin detecting LoRAs.";
+        pendingList.appendChild(empty);
+      } else {
+        for (const loraName of status.actionable) {
+          const item = document.createElement("div");
+          const itemError = status.errors.get(loraName) || "";
+          item.className = `apex-folder-sync-item${itemError ? " error" : ""}`;
+          const copy = document.createElement("div");
+          copy.className = "apex-folder-sync-item-copy";
+          const name = document.createElement("div");
+          name.className = "apex-folder-sync-item-name";
+          name.appendChild(loraNameContent(loraName, node.__apexState.settings));
+          name.title = itemError || loraName;
+          copy.appendChild(name);
+          if (itemError) {
+            const error = document.createElement("div");
+            error.className = "apex-folder-sync-item-error";
+            error.textContent = itemError;
+            error.title = itemError;
+            copy.appendChild(error);
+          }
+          const ignore = document.createElement("button");
+          ignore.type = "button";
+          ignore.textContent = "Ignore";
+          ignore.disabled = busy || dirty;
+          ignore.addEventListener("click", async () => {
+            const operation = beginOperation();
+            busy = true;
+            renderPanel();
+            let identity = { name: loraName, sha256: "", size: 0 };
+            try {
+              const [identified] = await identifyNames([loraName]);
+              if (identified) identity = identified;
+            } catch {
+              // A name-only ignored entry still prevents the UI from fighting
+              // a deliberate choice when a file vanishes during the action.
+            }
+            if (!operationIsCurrent(operation)) {
+              abandonOperation(operation);
+              return;
+            }
+            const current = operation.section;
+            let next = addIgnoredIdentity(current.folder_sync, identity);
+            if (next.mode === "new") next = markSectionSyncSeen(next, [loraName]);
+            current.folder_sync = next;
+            node.__apexFolderSyncErrors?.get(sectionId)?.delete(loraName);
+            busy = false;
+            draft = normalizeSectionSync(next);
+            commit(node, { fullPresetDirty: true, folderSyncDirty: true });
+            setStatus(node, `Ignored “${splitName(loraName).file}” for “${current.name}”.`);
+            renderPanel();
+          });
+          item.append(copy, ignore);
+          pendingList.appendChild(item);
+        }
+      }
+      pendingPanel.append(pendingHeading, pendingList);
+      body.appendChild(pendingPanel);
+
+      sync.addEventListener("click", async () => {
+        const current = sectionById(node, sectionId);
+        if (!current) return;
+        const names = sectionSyncStatus(node, sectionId).actionable;
+        if (!names.length) return;
+        const operation = beginOperation();
+        busy = true;
+        renderPanel();
+        setStatus(node, `Verifying ${names.length} folder-sync LoRA${names.length === 1 ? "" : "s"}…`);
+        let progressStatus = node.__apexStatus;
+        const resolved = await resolveSectionSyncNames(
+          names,
+          (completed, total) => {
+            if (!operationIsCurrent(operation)) return false;
+            setStatus(node, `Verifying folder-sync LoRAs ${completed}/${total}…`);
+            progressStatus = node.__apexStatus;
+            return true;
+          },
+        );
+        if (!operationIsCurrent(operation)) {
+          abandonOperation(operation, progressStatus);
+          return;
+        }
+        const syncResult = applySectionSyncResolution(
+          node,
+          sectionId,
+          names,
+          resolved,
+          (catalogCache || catalog).loras,
+        );
+        busy = false;
+        const currentSection = sectionById(node, sectionId);
+        if (!currentSection || syncResult.aborted) {
+          abandonOperation(operation, progressStatus);
+          return;
+        }
+        draft = normalizeSectionSync(currentSection.folder_sync);
+        const result = [
+          `${syncResult.added} added`,
+          syncResult.renamed ? `${syncResult.renamed} renamed` : "",
+          syncResult.failed ? `${syncResult.failed} failed` : "",
+        ].filter(Boolean).join(", ");
+        setStatus(
+          node,
+          `Folder sync for “${currentSection.name}”: ${result || "no changes"}.`,
+          syncResult.failed > 0,
+        );
+        renderPanel();
+      });
+
+      const ignoredDetails = document.createElement("details");
+      ignoredDetails.className = "apex-folder-sync-ignored";
+      const ignoredSummary = document.createElement("summary");
+      ignoredSummary.textContent = `Ignored LoRAs (${live.ignored.length})`;
+      ignoredDetails.appendChild(ignoredSummary);
+      const ignoredList = document.createElement("div");
+      ignoredList.className = "apex-folder-sync-items";
+      if (!live.ignored.length) {
+        const empty = document.createElement("div");
+        empty.className = "apex-folder-sync-empty";
+        empty.textContent = "No LoRAs are ignored for this section.";
+        ignoredList.appendChild(empty);
+      } else {
+        for (const identity of live.ignored) {
+          const item = document.createElement("div");
+          item.className = "apex-folder-sync-item ignored";
+          const name = document.createElement("div");
+          name.className = "apex-folder-sync-item-name";
+          name.appendChild(loraNameContent(identity.name, node.__apexState.settings));
+          name.title = identity.name;
+          const allow = document.createElement("button");
+          allow.type = "button";
+          allow.textContent = "Allow again";
+          allow.disabled = busy || dirty;
+          allow.addEventListener("click", () => {
+            const current = sectionById(node, sectionId);
+            if (!current) return;
+            allowSectionSyncIdentity(current, identity);
+            draft = normalizeSectionSync(current.folder_sync);
+            commit(node, { fullPresetDirty: true, folderSyncDirty: true });
+            setStatus(node, `Allowed “${splitName(identity.name).file}” for folder sync.`);
+            renderPanel();
+          });
+          item.append(name, allow);
+          ignoredList.appendChild(item);
+        }
+      }
+      ignoredDetails.appendChild(ignoredList);
+      body.appendChild(ignoredDetails);
+    };
+
+    openPopover.refresh = renderPanel;
+    renderPanel();
+    setStatus(node, "");
   } catch (error) {
     setStatus(node, error.message, true);
   }
@@ -1474,35 +2629,63 @@ async function showTriggerEditor(node, anchor, rowId) {
 
 async function resolveNodeLoras(node, force = false) {
   const rows = allRows(node.__apexState);
-  if (!rows.length) {
-    if (force) setStatus(node, "LoRA list refreshed.");
-    return;
-  }
+  let catalogReloaded = false;
   try {
-    if (force) await loadCatalog(true);
+    if (force) {
+      await loadCatalog(true);
+      catalogReloaded = true;
+    }
+    if (!rows.length) {
+      invalidateSectionSync(node);
+      if (force) {
+        refreshAllSectionSyncStatuses();
+        setStatus(node, "LoRA list refreshed.");
+        await queueAutoSyncPass([node]);
+      }
+      else refreshNodeSectionSyncStatus(node, true);
+      return;
+    }
     setStatus(node, force ? "Refreshing and verifying LoRAs…" : "Checking LoRA names…");
-    const data = await fetchJson("/apex_lora_loader/resolve", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        entries: rows.map(({ id, name, sha256, size, trigger_words, active_trigger_words }) => ({
-          id,
-          name,
-          sha256,
-          size,
-          trigger_words,
-          active_trigger_words,
-        })),
-        force,
-      }),
-    });
+    const data = { entries: [], errors: [] };
+    for (let index = 0; index < rows.length; index += 512) {
+      const batch = rows.slice(index, index + 512);
+      const result = await fetchJson("/apex_lora_loader/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entries: batch.map(
+            ({ id, name, sha256, size, trigger_words, active_trigger_words }) => ({
+              id,
+              name,
+              sha256,
+              size,
+              trigger_words,
+              active_trigger_words,
+            }),
+          ),
+          force,
+        }),
+      });
+      data.entries.push(...(result.entries || []));
+      data.errors.push(...(result.errors || []));
+      if (rows.length > 512) {
+        const completed = Math.min(index + batch.length, rows.length);
+        setStatus(
+          node,
+          `${force ? "Refreshing and verifying" : "Checking"} LoRAs ${completed}/${rows.length}…`,
+        );
+      }
+    }
     if (data.entries?.length) metadataCache = null;
     let renamed = 0;
     let stateChanged = false;
     let contentChanged = false;
+    let syncChanged = false;
     for (const identity of data.entries || []) {
       const row = rowById(node, identity.id);
       if (!row) continue;
+      const section = node.__apexState.sections.find((item) => item.loras.includes(row));
+      const previousIdentity = rowIdentity(row);
       if (identity.renamed && row.name !== identity.name) renamed += 1;
       if (
         row.name !== identity.name ||
@@ -1518,19 +2701,39 @@ async function resolveNodeLoras(node, force = false) {
       row.size = identity.size;
       applyTriggerMetadata(row, identity);
       delete row.error;
+      if (section) {
+        syncChanged = migrateSectionSyncIdentity(
+          section,
+          previousIdentity,
+          rowIdentity(row),
+        ) || syncChanged;
+      }
     }
     for (const item of data.errors || []) {
       const row = rowById(node, item.id);
       if (row) row.error = item.error;
     }
-    if (stateChanged) commit(node, { presetDirty: contentChanged });
-    else renderNode(node);
+    if (stateChanged || syncChanged) {
+      commit(node, {
+        presetDirty: contentChanged,
+        folderSyncDirty: true,
+      });
+    } else {
+      invalidateSectionSync(node);
+      renderNode(node);
+    }
+    openPopover?.refresh?.();
     const errors = data.errors?.length || 0;
     if (errors) setStatus(node, `${errors} LoRA${errors === 1 ? " is" : "s are"} missing.`, true);
     else if (renamed) setStatus(node, `Updated ${renamed} renamed LoRA${renamed === 1 ? "" : "s"}.`);
     else setStatus(node, force ? "LoRAs refreshed and verified." : "");
+    if (force) {
+      refreshAllSectionSyncStatuses();
+      await queueAutoSyncPass([node]);
+    }
   } catch (error) {
     setStatus(node, error.message, true);
+    if (force && catalogReloaded) refreshAllSectionSyncStatuses();
   }
 }
 
@@ -1902,12 +3105,17 @@ function applySelectedPreset(node, presetId) {
   if (
     presetType(preset) === "full"
     && !window.confirm(
-      `Apply full setup preset “${preset.name}”?\n\nThis will replace the current folder filters, node settings, sections, LoRA rows, ordering, enabled states, strengths, and trigger-word configuration.\n\nContinue?`,
+      `Apply full setup preset “${preset.name}”?\n\nThis will replace the current folder filters, node settings, sections, folder-sync rules, LoRA rows, ordering, enabled states, strengths, and trigger-word configuration.\n\nContinue?`,
     )
   ) return false;
   if (presetType(preset) === "full") {
     const result = applyFullPreset(node.__apexState, preset);
-    commit(node, { presetDirty: false });
+    node.__apexFolderAutoSyncAdded?.clear?.();
+    commit(node, {
+      presetDirty: false,
+      folderSyncDirty: true,
+      clearFolderSyncErrors: true,
+    });
     setStatus(
       node,
       `Applied full setup “${preset.name}” with ${result.sections} section${result.sections === 1 ? "" : "s"} and ${result.loras} LoRA${result.loras === 1 ? "" : "s"}.`,
@@ -2185,10 +3393,10 @@ function installRowDropTarget(node, section, rows) {
     event.preventDefault();
     event.stopPropagation();
     const target = rowDropIndex(rows, event.clientY);
-    moveRow(node.__apexState, dragPayload.rowId, section.id, target.index);
+    moveRowWithSectionSync(node, dragPayload.rowId, section.id, target.index);
     dragPayload = null;
     clearDragFeedback();
-    commit(node, { fullPresetDirty: true });
+    commit(node, { fullPresetDirty: true, folderSyncDirty: true });
   });
 }
 
@@ -2269,8 +3477,9 @@ function buildRow(node, section, row) {
 
   const remove = iconButton("x", "Remove this LoRA", "apex-row-remove");
   remove.addEventListener("click", () => {
+    recordSectionSyncRemoval(section, row);
     section.loras.splice(section.loras.indexOf(row), 1);
-    commit(node, { presetDirty: true });
+    commit(node, { presetDirty: true, folderSyncDirty: true });
   });
 
   element.append(handle, enabledCell, name, strength);
@@ -2350,14 +3559,52 @@ function buildSection(node, section) {
   title.append(name, count);
   const actions = document.createElement("div");
   actions.className = "apex-section-actions";
-  const add = iconButton("plus", "Add a LoRA to this section", "apex-section-add");
-  add.addEventListener("click", () => showLoraChooser(node, add, section.id));
+  const syncStatus = sectionSyncStatus(node, section.id);
+  const autoSyncAdded = node.__apexFolderAutoSyncAdded?.get(section.id) || 0;
+  const syncNotices = [
+    autoSyncAdded
+      ? `Auto Sync added ${autoSyncAdded} disabled LoRA${autoSyncAdded === 1 ? "" : "s"}`
+      : "",
+    syncStatus.actionable.length
+      ? `${syncStatus.actionable.length} ${syncStatus.config.mode === "new" ? "new" : "missing"} LoRA${syncStatus.actionable.length === 1 ? "" : "s"} detected`
+      : "",
+  ].filter(Boolean);
+  const addTitle = syncNotices.length
+    ? `${syncNotices.join("; ")}; open Add LoRA to review`
+    : syncStatus.config.enabled
+      ? `Add a LoRA to this section; folder sync is ${syncStatus.config.mode === "new" ? "watching for new files" : "up to date"}`
+      : "Add a LoRA to this section";
+  const add = iconButton("plus", addTitle, "apex-section-add");
+  if (syncStatus.actionable.length) {
+    add.classList.add("sync-pending");
+    const badge = document.createElement("span");
+    badge.className = "apex-section-sync-badge";
+    badge.textContent = syncStatus.actionable.length > 99
+      ? "99+"
+      : String(syncStatus.actionable.length);
+    add.appendChild(badge);
+  } else if (autoSyncAdded) {
+    add.classList.add("sync-added");
+    const badge = document.createElement("span");
+    badge.className = "apex-section-sync-badge added";
+    badge.textContent = autoSyncAdded > 99 ? "+99" : `+${autoSyncAdded}`;
+    add.appendChild(badge);
+  }
+  add.addEventListener("click", () => {
+    if (autoSyncAdded) {
+      node.__apexFolderAutoSyncAdded?.delete(section.id);
+      add.classList.remove("sync-added");
+      add.querySelector(".apex-section-sync-badge.added")?.remove();
+    }
+    showLoraChooser(node, add, section.id);
+  });
   const remove = iconButton("listX", "Delete this section", "apex-section-remove");
   remove.addEventListener("click", () => {
     if (section.loras.length && !window.confirm(`Delete “${section.name}” and its ${section.loras.length} LoRA row(s)?`)) return;
     node.__apexState.sections.splice(node.__apexState.sections.indexOf(section), 1);
+    node.__apexFolderAutoSyncAdded?.delete(section.id);
     if (!node.__apexState.sections.length) node.__apexState.sections.push(createSection("LoRAs", 0));
-    commit(node, { presetDirty: true });
+    commit(node, { presetDirty: true, folderSyncDirty: true });
   });
   leading.append(handle, collapse, toggleAll);
   actions.append(remove, add);
@@ -2379,11 +3626,16 @@ function buildSection(node, section) {
     if (dragPayload?.type !== "row" || dragPayload.node !== node || event.target.closest(".apex-rows")) return;
     event.preventDefault();
     event.stopPropagation();
-    moveRow(node.__apexState, dragPayload.rowId, section.id, section.loras.length);
+    moveRowWithSectionSync(
+      node,
+      dragPayload.rowId,
+      section.id,
+      section.loras.length,
+    );
     if (section.collapsed) section.collapsed = false;
     dragPayload = null;
     clearDragFeedback();
-    commit(node, { fullPresetDirty: true });
+    commit(node, { fullPresetDirty: true, folderSyncDirty: true });
   });
 
   if (!section.collapsed) {
@@ -2439,7 +3691,7 @@ function sectionDropTarget(node, lane, clientY) {
 function addSectionToColumn(node, column) {
   const section = createSection(`Section ${node.__apexState.sections.length + 1}`, column);
   addSectionToState(node.__apexState, section, column);
-  commit(node, { fullPresetDirty: true });
+  commit(node, { fullPresetDirty: true, folderSyncDirty: true });
 }
 
 
@@ -3014,6 +4266,10 @@ function buildNodeUI(node) {
   node.__apexState = normalizeState(widget?.value);
   if (widget) widget.value = serializeState(node.__apexState);
   node.__apexPresets = presetsCache || [];
+  node.__apexFolderSyncRevision = 0;
+  node.__apexFolderSyncCache = null;
+  node.__apexFolderSyncErrors = new Map();
+  node.__apexFolderAutoSyncAdded = new Map();
 
   const root = document.createElement("div");
   root.className = "apex-lora-preview";
@@ -3048,7 +4304,11 @@ function buildNodeUI(node) {
     node.__apexPresets = presets;
     renderNode(node);
   }).catch((error) => setStatus(node, error.message, true));
-  loadCatalog().catch((error) => setStatus(node, error.message, true));
+  loadCatalog().then(() => {
+    if (!node.__apexBuilt) return;
+    invalidateSectionSync(node);
+    refreshNodeSectionSyncStatus(node, true);
+  }).catch((error) => setStatus(node, error.message, true));
   setTimeout(() => resolveNodeLoras(node, false), 0);
 }
 
@@ -3063,14 +4323,23 @@ function handleRuntimeResolution(event) {
     const row = rowById(node, update.row_id) ||
       allRows(node.__apexState).find((item) => item.name === update.old_name);
     if (!row) continue;
+    const section = node.__apexState.sections.find((item) => item.loras.includes(row));
+    const previous = rowIdentity(row);
     row.name = update.name;
     row.sha256 = update.sha256;
     row.size = update.size;
     delete row.error;
+    if (section) {
+      migrateSectionSyncIdentity(
+        section,
+        previous,
+        rowIdentity(row),
+      );
+    }
     changed += 1;
   }
   if (changed) {
-    commit(node, { presetDirty: false });
+    commit(node, { presetDirty: false, folderSyncDirty: true });
     setStatus(node, `Updated ${changed} renamed LoRA${changed === 1 ? "" : "s"}.`);
   }
 }
@@ -3098,6 +4367,8 @@ app.registerExtension({
       if (!this.__apexBuilt) buildNodeUI(this);
       hideDataWidget(dataWidget(this));
       this.__apexState = normalizeState(dataWidget(this)?.value);
+      this.__apexFolderAutoSyncAdded?.clear?.();
+      invalidateSectionSync(this, true);
       const widget = dataWidget(this);
       if (widget) widget.value = serializeState(this.__apexState);
       if (this.collapsed) {
@@ -3128,6 +4399,9 @@ app.registerExtension({
       this.__apexRoot?.replaceChildren();
       this.__apexStatusElement = null;
       this.__apexOpenButton = null;
+      this.__apexFolderSyncCache = null;
+      this.__apexFolderSyncErrors = null;
+      this.__apexFolderAutoSyncAdded = null;
       this.__apexBuilt = false;
       try {
         return originalRemoved?.apply(this, arguments);

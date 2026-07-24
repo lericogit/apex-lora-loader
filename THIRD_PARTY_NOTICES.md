@@ -7,7 +7,7 @@ The independent Preset Jobs interface in `web/apex_preset_jobs.js` uses the
 same locally embedded SVG-path approach.
 
 Embedded icons: `trash-2`, `list-plus`, `list-x`, `plus`,
-`rotate-cw`, `folder-cog`, `file-sliders`, `settings`, `save-plus`,
+`rotate-cw`, `folder-cog`, `folder-sync`, `file-sliders`, `settings`, `save-plus`,
 `tag`, `chevron-right`, `chevron-down`,
 `list-chevrons-down-up`, `list-chevrons-up-down`, `play`, `copy`,
 `grip-vertical`, `list-chevrons-up-down`, `list-chevrons-down-up`, and `x`.

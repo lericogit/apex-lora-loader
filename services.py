@@ -14,6 +14,10 @@ HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 METADATA_VERSION = 3
 PRESET_VERSION = 2
 TRIGGER_WORD_MAX_LENGTH = 2000
+# New-only baselines mirror catalog filenames rather than stack rows. Keep a
+# defensive ceiling, but high enough for very large LoRA installations.
+FOLDER_SYNC_MAX_RULES = 10_000
+FOLDER_SYNC_MAX_ITEMS = 100_000
 
 
 def normalize_lora_name(name):
@@ -542,6 +546,10 @@ class PresetStore:
                 "name": section_name,
                 "collapsed": collapsed,
                 "column": column,
+                "folder_sync": self._validate_folder_sync(
+                    section.get("folder_sync", {}),
+                    section_name,
+                ),
                 "loras": clean_loras,
             })
 
@@ -560,6 +568,145 @@ class PresetStore:
             raise ValueError(f"{label} ids must be unique within a full preset.")
         used.add(value)
         return value
+
+    @staticmethod
+    def _validate_folder_sync(folder_sync, section_name):
+        if not isinstance(folder_sync, dict):
+            raise ValueError(f"Folder sync for section '{section_name}' must be an object.")
+
+        enabled = folder_sync.get("enabled", False)
+        if not isinstance(enabled, bool):
+            raise ValueError(
+                f"Folder sync enabled state for section '{section_name}' must be true or false."
+            )
+
+        auto_sync = folder_sync.get("auto_sync", False)
+        if not isinstance(auto_sync, bool):
+            raise ValueError(
+                f"Folder sync auto_sync state for section '{section_name}' must be true or false."
+            )
+
+        mode = folder_sync.get("mode", "mirror")
+        if mode not in ("mirror", "new"):
+            raise ValueError(
+                f"Folder sync mode for section '{section_name}' must be mirror or new."
+            )
+
+        def clean_strings(field, limit, normalize):
+            values = folder_sync.get(field, [])
+            if not isinstance(values, list) or len(values) > limit:
+                raise ValueError(
+                    f"Folder sync {field} for section '{section_name}' must be an array "
+                    f"of at most {limit} strings."
+                )
+            clean = []
+            used = set()
+            for value in values:
+                if not isinstance(value, str):
+                    raise ValueError(
+                        f"Folder sync {field} for section '{section_name}' must contain strings."
+                    )
+                normalized = normalize(value)
+                if normalized in used:
+                    continue
+                used.add(normalized)
+                clean.append(normalized)
+            return clean
+
+        def normalize_folder(value):
+            parts = []
+            for raw_part in value.replace("\\", "/").split("/"):
+                part = raw_part.strip()
+                if not part or part == ".":
+                    continue
+                if part == "..":
+                    raise ValueError(
+                        f"Folder sync paths for section '{section_name}' cannot contain '..'."
+                    )
+                parts.append(part)
+            return "/".join(parts)
+
+        def normalize_seen_name(value):
+            try:
+                return normalize_lora_name(value)
+            except ValueError as error:
+                raise ValueError(
+                    f"Folder sync seen_names for section '{section_name}' must contain "
+                    "non-empty LoRA name strings."
+                ) from error
+
+        include_folders = clean_strings(
+            "include_folders",
+            FOLDER_SYNC_MAX_RULES,
+            normalize_folder,
+        )
+        exclude_folders = clean_strings(
+            "exclude_folders",
+            FOLDER_SYNC_MAX_RULES,
+            normalize_folder,
+        )
+        overlap = set(include_folders).intersection(exclude_folders)
+        if overlap:
+            raise ValueError(
+                f"Folder sync include_folders and exclude_folders for section '{section_name}' "
+                "cannot contain the same folder."
+            )
+
+        ignored = folder_sync.get("ignored", [])
+        if not isinstance(ignored, list) or len(ignored) > FOLDER_SYNC_MAX_ITEMS:
+            raise ValueError(
+                f"Folder sync ignored identities for section '{section_name}' must be an array "
+                f"of at most {FOLDER_SYNC_MAX_ITEMS} items."
+            )
+        clean_ignored = []
+        ignored_identities = set()
+        for identity in ignored:
+            if not isinstance(identity, dict):
+                raise ValueError(
+                    f"Folder sync ignored identities for section '{section_name}' must be objects."
+                )
+            name = normalize_lora_name(identity.get("name"))
+            raw_digest = identity.get("sha256")
+            digest = (
+                raw_digest.lower()
+                if isinstance(raw_digest, str)
+                and HASH_PATTERN.fullmatch(raw_digest.lower()) is not None
+                else ""
+            )
+            raw_size = identity.get("size")
+            size = (
+                raw_size
+                if not isinstance(raw_size, bool)
+                and isinstance(raw_size, int)
+                and raw_size >= 0
+                else 0
+            )
+            # Separately named files may intentionally share identical content.
+            # Preserve those entries; SHA-256 is used later for rename matching,
+            # not to collapse distinct catalog names.
+            identity_key = name
+            if identity_key in ignored_identities:
+                continue
+            ignored_identities.add(identity_key)
+            clean_ignored.append({
+                "name": name,
+                "sha256": digest,
+                "size": size,
+            })
+
+        return {
+            "enabled": enabled,
+            "auto_sync": auto_sync,
+            "mode": mode,
+            "include_folders": include_folders,
+            "exclude_folders": exclude_folders,
+            "seen_names": clean_strings(
+                "seen_names",
+                FOLDER_SYNC_MAX_ITEMS,
+                normalize_seen_name,
+            ),
+            "ignored": clean_ignored,
+        }
 
     def _validate_full_row(self, row, row_ids):
         if not isinstance(row, dict):
