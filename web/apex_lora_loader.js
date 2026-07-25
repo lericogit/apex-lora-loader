@@ -3505,9 +3505,63 @@ function setStrengthFill(input, value) {
 
 
 function toggleRowZero(node, row, autoQueue = false) {
-  setMuted(row, !isMuted(row));
-  commit(node, { presetDirty: true });
+  setRowZero(node, row, !isMuted(row), autoQueue);
+}
+
+
+function setRowZero(node, row, muted, autoQueue = false) {
+  if (!setMuted(row, muted)) return false;
+  commit(node, { presetDirty: true, render: false });
+  syncRowZeroElements(node, row);
   if (autoQueue) notifyEditorAutoQueue(node);
+  return true;
+}
+
+
+function syncRowZeroElements(node, row) {
+  const muted = isMuted(row);
+  const selector = `[data-apex-row-id="${CSS.escape(String(row.id))}"]`;
+  const roots = new Set([
+    node.__apexRoot,
+    editorView?.node === node ? editorView.root : null,
+  ]);
+  for (const root of roots) {
+    if (!root?.querySelectorAll) continue;
+    for (const element of root.querySelectorAll(selector)) {
+      element.classList.toggle("muted", muted);
+      if (element.classList.contains("apex-preview-row")) {
+        element.classList.toggle("inactive", muted || Number(row.strength) === 0);
+      }
+      const strength = element.querySelector(".apex-strength");
+      if (strength) {
+        strength.classList.toggle("muted", muted);
+        strength.title = muted
+          ? "Saved strength, temporarily overridden to 0,00. Drag or type to change the saved value; it stays inactive until the mute is released."
+          : `Model strength. Drag left or right to adjust by exactly ${node.__apexState.settings.strength_drag_step} per tick; click to type.`;
+      }
+      const overlayAction = element.querySelector(".apex-zero-overlay-action");
+      if (overlayAction) {
+        overlayAction.title = muted
+          ? `Restore the saved strength of ${formatStrength(row.strength)}.\nRight-click the LoRA row to toggle its temporary 0,00 override.`
+          : "Temporarily apply this LoRA at 0,00.\nYou can also right-click the LoRA row to toggle temporary zero.";
+        overlayAction.setAttribute(
+          "aria-label",
+          `${muted ? "Restore" : "Temporarily zero"} the strength of ${row.name}`,
+        );
+      }
+      if (element.classList.contains("apex-row")) {
+        const unmute = element.querySelector(".apex-row-unmute");
+        if (muted && !unmute) element.appendChild(createRowUnmuteButton(node, row));
+        if (!muted) unmute?.remove();
+      }
+    }
+  }
+  if (editorView?.node === node) {
+    const presetMenu = editorView.controls?.querySelector(".apex-preset-select");
+    const presetLabel = presetMenu?.querySelector("span");
+    if (presetLabel) presetLabel.textContent = "Custom";
+    if (presetMenu) presetMenu.title = "Custom node state";
+  }
 }
 
 
@@ -3559,9 +3613,7 @@ function createRowUnmuteButton(node, row) {
   button.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
-    if (!setMuted(row, false)) return;
-    commit(node, { presetDirty: true });
-    notifyEditorAutoQueue(node);
+    setRowZero(node, row, false, true);
   });
   return button;
 }
@@ -3671,6 +3723,7 @@ function installRowDropTarget(node, section, rows) {
 
 function buildRow(node, section, row) {
   const element = document.createElement("div");
+  element.dataset.apexRowId = row.id;
   const showTriggerButton = node.__apexState.settings.show_trigger_button;
   element.className = `apex-row${showTriggerButton ? " with-trigger" : ""}${row.enabled ? "" : " disabled"}${isMuted(row) ? " muted" : ""}${row.error ? " error" : ""}`;
   element.title = row.error || row.name;
@@ -4212,6 +4265,7 @@ function renderPreview(node, summary = previewSummary(node.__apexState)) {
     const reserveTrigger = summary.rows.some((item) => item.triggerWordCount > 0);
     for (const item of summary.rows) {
       const row = document.createElement("div");
+      row.dataset.apexRowId = item.id;
       row.className = `apex-preview-row${item.effective ? "" : " inactive"}${item.muted ? " muted" : ""}${item.error ? " error" : ""}`;
       row.setAttribute("aria-label", item.error || `${item.sectionName} / ${item.name}`);
       const main = document.createElement("div");
