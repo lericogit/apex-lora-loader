@@ -537,9 +537,10 @@
 }
 
 .apex-row {
+  position: relative;
   box-sizing: border-box;
   display: grid;
-  grid-template-columns: 24px 20px minmax(100px, 1fr) 22px 60px 30px;
+  grid-template-columns: 24px 20px minmax(100px, 1fr) 60px 30px;
   gap: 0;
   align-items: stretch;
   min-height: 28px;
@@ -552,7 +553,7 @@
   overflow: hidden;
   transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
 }
-.apex-row.with-trigger { grid-template-columns: 24px 20px minmax(100px, 1fr) 22px 60px 30px 30px; }
+.apex-row.with-trigger { grid-template-columns: 24px 20px minmax(100px, 1fr) 60px 30px 30px; }
 .apex-row:last-child { margin-bottom: 0; }
 .apex-row:hover:not(.disabled):not(.error),
 .apex-row:focus-within:not(.disabled):not(.error) {
@@ -712,28 +713,99 @@
   background: rgba(214, 168, 92, .045);
 }
 .apex-row.muted .apex-lora-name { color: var(--apex-text-dim); }
-/* The zero key is welded to the strength field and stays out of sight until the
-   row is hovered or the override is active. Its cell keeps its width either
-   way, so no control ever shifts position. */
-.apex-row .apex-row-zero {
-  color: var(--apex-text-dim);
-  font: 500 11px/14px var(--apex-code-font) !important;
+.apex-row.muted .apex-row-enable input { visibility: hidden; }
+.apex-row .apex-row-unmute {
+  position: absolute;
+  z-index: 6;
+  inset: 0 auto 0 24px;
+  width: 20px;
+  min-width: 20px !important;
+  height: auto;
+  min-height: 0;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: rgba(214, 168, 92, .1) !important;
+  box-shadow:
+    inset -1px 0 rgba(214, 168, 92, .24),
+    inset 1px 0 rgba(214, 168, 92, .07);
+  color: rgba(239, 195, 112, .9) !important;
+}
+.apex-row .apex-row-unmute:hover {
+  background: rgba(214, 168, 92, .17) !important;
+  color: #ffdda0 !important;
+}
+.apex-row:hover:not(.disabled):not(.error) .apex-row-unmute,
+.apex-row:focus-within:not(.disabled):not(.error) .apex-row-unmute {
+  box-shadow:
+    inset 0 2px rgba(119, 213, 220, .34),
+    inset -1px 0 rgba(214, 168, 92, .24),
+    inset 1px 0 rgba(214, 168, 92, .07);
+}
+.apex-row .apex-row-unmute:focus-visible {
+  box-shadow:
+    inset 0 2px rgba(119, 213, 220, .34),
+    inset 0 0 0 1px rgba(239, 195, 112, .55);
+  outline: none;
+}
+.apex-row .apex-row-unmute svg { width: 12px; height: 12px; }
+
+/* Minimal hover affordance used only by the compact node preview. */
+.apex-zero-overlay {
+  position: absolute;
+  z-index: 5;
+  inset: 0 auto 0 0;
+  width: 26px;
+  overflow: hidden;
+  border-radius: 0 2px 2px 0;
+  background: rgba(48, 39, 27, .98);
+  box-shadow:
+    inset -1px 0 rgba(214, 168, 92, .34),
+    inset 0 1px rgba(255, 222, 156, .05);
   opacity: 0;
-  transition: opacity 110ms ease, color 110ms ease, background-color 110ms ease;
+  pointer-events: none;
+  transform: translateX(-3px) scale(.97);
+  transition: opacity 180ms ease-in-out, transform 180ms ease-in-out;
 }
-.apex-row:hover .apex-row-zero,
-.apex-row:focus-within .apex-row-zero,
-.apex-row .apex-row-zero:focus-visible,
-.apex-row .apex-row-zero.active { opacity: 1; }
-.apex-row .apex-row-zero:hover,
-.apex-row .apex-row-zero:focus-visible {
-  color: var(--apex-mute);
-  background: rgba(214, 168, 92, .1);
+
+.apex-preview-row:has(
+  .apex-preview-row-main:hover,
+  .apex-preview-actions:hover,
+  .apex-zero-overlay:hover
+) > .apex-zero-overlay {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0) scale(1);
 }
-.apex-row .apex-row-zero.active,
-.apex-row:hover .apex-row-zero.active {
-  color: var(--apex-mute);
-  background: rgba(214, 168, 92, .13);
+.apex-zero-overlay-action {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: rgba(226, 179, 95, .82);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.apex-zero-overlay:hover {
+  background: rgba(61, 47, 28, .99);
+  box-shadow:
+    inset -1px 0 rgba(226, 179, 95, .46),
+    inset 0 1px rgba(255, 225, 166, .07);
+}
+.apex-preview-row.muted .apex-zero-overlay-action { color: rgba(255, 215, 143, .9); }
+.apex-zero-overlay-action:focus-visible {
+  outline: 1px solid currentColor;
+  outline-offset: -2px;
+}
+.apex-zero-overlay-action svg {
+  width: 14px;
+  height: 14px;
 }
 .apex-row.error .apex-strength {
   border-left-color: rgba(240, 113, 112, .28) !important;
@@ -1813,8 +1885,10 @@
   .apex-section-count { display: none; }
   .apex-section-name { font-size: 13px !important; }
   .apex-rows { padding: 5px; }
-  .apex-row { grid-template-columns: 22px 18px minmax(70px, 1fr) 20px 50px 27px; }
-  .apex-row.with-trigger { grid-template-columns: 22px 18px minmax(70px, 1fr) 20px 50px 27px 27px; }
+  .apex-row { grid-template-columns: 22px 18px minmax(70px, 1fr) 50px 27px; }
+  .apex-row.with-trigger { grid-template-columns: 22px 18px minmax(70px, 1fr) 50px 27px 27px; }
+  .apex-row .apex-row-unmute { left: 22px; width: 18px; min-width: 18px !important; }
+  .apex-row .apex-row-unmute svg { width: 11px; height: 11px; }
   .apex-strength { width: 50px; padding-inline: 3px; }
   .apex-lora-name { padding-inline: 5px; }
   .apex-lora-name .path { display: none; }

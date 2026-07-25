@@ -506,6 +506,7 @@
 }
 
 .apex-preview-row {
+  position: relative;
   box-sizing: border-box;
   display: grid;
   min-height: 24px;
@@ -541,56 +542,13 @@
 
 .apex-preview-row.muted .apex-preview-name { color: var(--apex-text-dim); }
 
-/* Both row buttons share one fixed cell between the name and the strength bar.
-   Fixed slot sizes keep them anchored regardless of the LoRA name or row
-   width, and the group sits tight against the strength bar. */
+/* Trigger metadata remains directly beside the fixed-width strength segment. */
 .apex-preview-actions {
   display: flex;
-  gap: 2px;
   margin-left: 8px;
-  margin-right: 5px;
+  margin-right: 3px;
   align-items: center;
   flex: none;
-}
-
-.apex-preview-zero {
-  display: inline-flex;
-  width: 15px;
-  height: 15px;
-  min-width: 15px !important;
-  min-height: 15px;
-  padding: 0 !important;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  border: 0 !important;
-  border-radius: 3px !important;
-  background: transparent !important;
-  color: var(--apex-text-dim);
-  font: 500 10px/13px var(--apex-code-font) !important;
-  opacity: 0;
-  cursor: pointer;
-  transition: color 110ms ease, background-color 110ms ease, opacity 110ms ease;
-}
-
-.apex-preview-row:hover .apex-preview-zero,
-.apex-preview-zero:focus-visible,
-.apex-preview-zero.active { opacity: 1; }
-
-.apex-preview-zero.placeholder { pointer-events: none; }
-
-.apex-preview-zero:hover,
-.apex-preview-zero:focus-visible {
-  background: rgba(214, 168, 92, .12) !important;
-  color: var(--apex-mute);
-}
-
-.apex-preview-zero.active,
-.apex-preview-row:hover .apex-preview-zero.active { color: var(--apex-mute); }
-
-.apex-preview-zero:focus-visible {
-  box-shadow: 0 0 0 1px rgba(214, 168, 92, .45);
-  outline: none;
 }
 
 .apex-preview-row-main {
@@ -798,6 +756,10 @@
 .apex-preview-row.muted .apex-preview-strength {
   border-left-color: rgba(214, 168, 92, .28) !important;
   opacity: 1;
+}
+
+.apex-preview-zero-overlay {
+  border-radius: 3px 1px 1px 3px;
 }
 
 .apex-preview-empty,

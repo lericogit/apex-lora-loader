@@ -114,6 +114,13 @@ const ICONS = {
       ["path", { d: "m6 6 12 12" }],
     ],
   },
+  ban: {
+    className: "lucide-ban",
+    nodes: [
+      ["circle", { cx: "12", cy: "12", r: "10" }],
+      ["path", { d: "M4.929 4.929 19.07 19.071" }],
+    ],
+  },
   listPlus: {
     className: "lucide-list-plus",
     nodes: [
@@ -3516,29 +3523,45 @@ function installZeroContextMenu(node, row, element, autoQueue = false) {
 }
 
 
-// The temporary zero belongs to the strength value rather than to the enabled
-// state, so it is a numeral welded to the strength field instead of an icon in
-// the row's icon cluster. It stays hidden until the row is hovered or the
-// override is active, while its cell keeps reserving space so nothing shifts.
-function createZeroToggle(node, row, className = "", autoQueue = false) {
+function createZeroOverlay(node, row, className = "", autoQueue = false) {
   const muted = isMuted(row);
-  const button = textIconButton(
-    "0",
-    muted
-      ? `Temporarily zeroed at 0,00. The saved strength of ${formatStrength(row.strength)} is kept.\nClick, or right-click anywhere on the row, to restore it.`
-      : `Temporarily apply this LoRA at 0,00 without disabling it or changing its saved strength.\nRight-clicking anywhere on the row does the same.`,
-  );
-  button.type = "button";
-  button.classList.add("apex-zero", ...(className ? [className] : []));
-  button.classList.toggle("active", muted);
-  button.setAttribute("aria-pressed", muted ? "true" : "false");
-  button.setAttribute(
+  const overlay = document.createElement("div");
+  overlay.className = `apex-zero-overlay${className ? ` ${className}` : ""}`;
+  const action = document.createElement("button");
+  action.type = "button";
+  action.tabIndex = -1;
+  action.className = "apex-zero-overlay-action";
+  action.title = muted
+    ? `Restore the saved strength of ${formatStrength(row.strength)}.\nRight-click the LoRA row to toggle its temporary 0,00 override.`
+    : "Temporarily apply this LoRA at 0,00.\nYou can also right-click the LoRA row to toggle temporary zero.";
+  action.setAttribute(
     "aria-label",
     `${muted ? "Restore" : "Temporarily zero"} the strength of ${row.name}`,
   );
-  button.addEventListener("click", (event) => {
+  action.appendChild(svgIcon("ban"));
+  action.addEventListener("click", (event) => {
+    event.preventDefault();
     event.stopPropagation();
     toggleRowZero(node, row, autoQueue);
+  });
+  overlay.appendChild(action);
+  return overlay;
+}
+
+
+function createRowUnmuteButton(node, row) {
+  const button = iconButton(
+    "ban",
+    `Restore saved strength ${formatStrength(row.strength)}.\nRight-click any LoRA row to toggle its temporary 0,00 override.`,
+  );
+  button.classList.add("apex-row-unmute");
+  button.setAttribute("aria-label", `Restore the strength of ${row.name}`);
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!setMuted(row, false)) return;
+    commit(node, { presetDirty: true });
+    notifyEditorAutoQueue(node);
   });
   return button;
 }
@@ -3694,7 +3717,6 @@ function buildRow(node, section, row) {
   name.addEventListener("click", () => showLoraChooser(node, name, section.id, row.id));
 
   const strength = createStrengthInput(node, row, "", true);
-  const zero = createZeroToggle(node, row, "apex-row-zero", true);
 
   const triggerMetadata = normalizeTriggerMetadata(row);
   const triggerCount = triggerMetadata.trigger_words.length;
@@ -3729,9 +3751,10 @@ function buildRow(node, section, row) {
   });
 
   installZeroContextMenu(node, row, element, true);
-  element.append(handle, enabledCell, name, zero, strength);
+  element.append(handle, enabledCell, name, strength);
   if (trigger) element.appendChild(trigger);
   element.appendChild(remove);
+  if (isMuted(row)) element.appendChild(createRowUnmuteButton(node, row));
   return element;
 }
 
@@ -4227,23 +4250,19 @@ function renderPreview(node, summary = previewSummary(node.__apexState)) {
         spacer.setAttribute("aria-hidden", "true");
         actions.appendChild(spacer);
       }
-      if (sourceRow) {
-        actions.appendChild(createZeroToggle(node, sourceRow, "apex-preview-zero"));
-        installZeroContextMenu(node, sourceRow, row);
-      } else {
-        const spacer = document.createElement("span");
-        spacer.className = "apex-zero apex-preview-zero placeholder";
-        spacer.setAttribute("aria-hidden", "true");
-        actions.appendChild(spacer);
-      }
       const strength = sourceRow
         ? createStrengthInput(node, sourceRow, "apex-preview-strength")
         : document.createElement("span");
       if (!sourceRow) {
         strength.className = "apex-preview-strength";
         strength.textContent = formatStrength(item.strength);
+      } else {
+        installZeroContextMenu(node, sourceRow, row);
       }
-      row.append(main, actions, strength);
+      row.append(main);
+      if (reserveTrigger) row.append(actions);
+      row.append(strength);
+      if (sourceRow) row.append(createZeroOverlay(node, sourceRow, "apex-preview-zero-overlay"));
       list.appendChild(row);
     }
     if (summary.overflow) {
