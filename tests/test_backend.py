@@ -43,6 +43,7 @@ def row(
     active_trigger_words=None,
     active_trigger_word=None,
     trigger_position=None,
+    muted=None,
 ):
     entry = {
         "id": row_id or name,
@@ -52,6 +53,8 @@ def row(
         "sha256": digest or (name[0].lower() * 64),
         "size": size,
     }
+    if muted is not None:
+        entry["muted"] = muted
     if trigger_words is not None:
         entry["trigger_words"] = trigger_words
         if active_trigger_words is not None:
@@ -258,6 +261,80 @@ class BackendTests(unittest.TestCase):
         )
         self.assertTrue(result[0].endswith("weights:D-path@1.25"))
         self.assertEqual(result[1], "c-trigger, d-trigger, subject, c-trigger")
+
+    def test_parse_state_defaults_muted_to_false_and_validates_it(self):
+        [parsed] = nodes.parse_state(state([row("A.safetensors")]))
+        self.assertIs(parsed["muted"], False)
+        [muted] = nodes.parse_state(state([row("A.safetensors", muted=True)]))
+        self.assertIs(muted["muted"], True)
+        self.assertEqual(muted["strength"], 1.0)
+        with self.assertRaisesRegex(ValueError, "Muted"):
+            nodes.parse_state(state([row("A.safetensors", muted="yes")]))
+
+    def test_effective_strength_zeroes_muted_rows_without_touching_storage(self):
+        [parsed] = nodes.parse_state(state([row("A.safetensors", strength=0.85, muted=True)]))
+        self.assertEqual(parsed["strength"], 0.85)
+        self.assertEqual(nodes.effective_strength(parsed), 0.0)
+        parsed["muted"] = False
+        self.assertEqual(nodes.effective_strength(parsed), 0.85)
+
+    def test_muted_lora_is_not_applied_and_contributes_no_triggers(self):
+        entries = [
+            row(
+                "A.safetensors",
+                strength=0.85,
+                muted=True,
+                trigger_words=["a-trigger"],
+                active_trigger_words=["a-trigger"],
+            ),
+            row(
+                "B.safetensors",
+                strength=0.5,
+                trigger_words=["b-trigger"],
+                active_trigger_words=["b-trigger"],
+            ),
+        ]
+        paths = {"A.safetensors": "A-path", "B.safetensors": "B-path"}
+        applies = []
+
+        def resolve(entry):
+            return {
+                "name": entry["name"],
+                "path": paths[entry["name"]],
+                "sha256": entry["sha256"],
+                "size": entry["size"],
+                "renamed": False,
+            }
+
+        def apply(model, clip, lora, strength_model, strength_clip, lora_metadata=None):
+            applies.append((lora, strength_model))
+            return f"{model}>{lora}@{strength_model}", None
+
+        with (
+            patch.object(nodes.LORA_CATALOG, "resolve", side_effect=resolve),
+            patch.object(nodes.folder_paths, "get_full_path_or_raise", side_effect=lambda _kind, name: paths[name]),
+            patch.object(
+                nodes.comfy.utils,
+                "load_torch_file",
+                side_effect=lambda path, **_kwargs: (f"weights:{path}", None),
+            ),
+            patch.object(nodes.comfy.sd, "load_lora_for_models", side_effect=apply),
+        ):
+            result = nodes.ApexLoraLoader().load_loras("base", state(entries), prompt="subject")
+
+        self.assertEqual(applies, [("weights:B-path", 0.5)])
+        self.assertEqual(result[1], "subject, b-trigger")
+
+    def test_muted_missing_lora_is_not_resolved(self):
+        with patch.object(
+            nodes.LORA_CATALOG,
+            "resolve",
+            side_effect=AssertionError("muted LoRA should not be resolved"),
+        ):
+            result = nodes.ApexLoraLoader().load_loras(
+                "base", state([row("A.safetensors", muted=True)])
+            )
+        self.assertEqual(result[0], "base")
 
     def test_disabled_missing_lora_is_not_resolved(self):
         with patch.object(
@@ -503,6 +580,7 @@ class BackendTests(unittest.TestCase):
                                     "name": "folder/A.safetensors",
                                     "enabled": True,
                                     "strength": 0.456,
+                                    "muted": True,
                                     "sha256": "a" * 64,
                                     "size": 10,
                                     "trigger_words": [],
@@ -538,6 +616,10 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(
                 [entry["strength"] for entry in saved["state"]["sections"][0]["loras"]],
                 [-0.57, 0.46],
+            )
+            self.assertEqual(
+                [entry["muted"] for entry in saved["state"]["sections"][0]["loras"]],
+                [False, True],
             )
             self.assertEqual(
                 saved["state"]["sections"][0]["loras"][0]["trigger_words"],
@@ -594,6 +676,34 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(store.read()["presets"], [saved])
             self.assertEqual(json.loads((tmp_path / "presets.json").read_text(encoding="utf-8"))["version"], 2)
             self.assertFalse(list(tmp_path.glob("*.tmp")))
+
+    def test_full_preset_rejects_invalid_muted_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = services.PresetStore(str(Path(directory) / "presets.json"))
+            with self.assertRaisesRegex(ValueError, "Muted"):
+                store.upsert({
+                    "name": "Broken mute",
+                    "type": "full",
+                    "state": {
+                        "version": 1,
+                        "folder_filters": None,
+                        "sections": [{
+                            "id": "section-one",
+                            "name": "First",
+                            "collapsed": False,
+                            "column": 0,
+                            "loras": [{
+                                "id": "row-a",
+                                "name": "A.safetensors",
+                                "enabled": True,
+                                "strength": 1,
+                                "muted": "yes",
+                                "sha256": "a" * 64,
+                                "size": 10,
+                            }],
+                        }],
+                    },
+                })
 
     def test_full_preset_legacy_sections_default_folder_sync_to_disabled(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -55,6 +55,9 @@ def parse_state(raw_state):
             if not math.isfinite(strength) or strength < -100 or strength > 100:
                 raise ValueError(f"Strength for '{name}' must be between -100 and 100.")
             strength = round(strength, 2)
+            muted = entry.get("muted", False)
+            if not isinstance(muted, bool):
+                raise ValueError(f"Muted state for '{name}' must be true or false.")
             digest, size = validate_identity(entry)
             _, active_trigger_words = normalize_trigger_metadata(entry)
             trigger_position = entry.get("trigger_position", "append")
@@ -67,6 +70,7 @@ def parse_state(raw_state):
                 "name": name,
                 "enabled": enabled,
                 "strength": strength,
+                "muted": muted,
                 "sha256": digest,
                 "size": size,
                 "active_trigger_words": active_trigger_words,
@@ -75,13 +79,22 @@ def parse_state(raw_state):
     return rows
 
 
+def effective_strength(entry):
+    """Return the strength a row actually contributes.
+
+    The temporary zero override never rewrites the stored strength, so every
+    execution path derives its value here instead of reading ``strength``.
+    """
+    return 0.0 if entry.get("muted") else entry["strength"]
+
+
 def augment_prompt(prompt, rows):
     if not isinstance(prompt, str):
         raise ValueError("Apex LoRA prompt must be a string.")
     prepended = []
     appended = []
     for entry in rows:
-        if not entry["enabled"] or entry["strength"] == 0:
+        if not entry["enabled"] or effective_strength(entry) == 0:
             continue
         trigger_words = entry["active_trigger_words"]
         if not trigger_words:
@@ -147,7 +160,8 @@ class ApexLoraLoader:
         prompt = augment_prompt(prompt, rows)
 
         for entry in rows:
-            if not entry["enabled"] or entry["strength"] == 0:
+            strength = effective_strength(entry)
+            if not entry["enabled"] or strength == 0:
                 continue
             resolved = LORA_CATALOG.resolve(entry)
             path = folder_paths.get_full_path_or_raise("loras", resolved["name"])
@@ -160,7 +174,7 @@ class ApexLoraLoader:
                 model,
                 None,
                 lora,
-                entry["strength"],
+                strength,
                 0,
                 lora_metadata=metadata,
             )

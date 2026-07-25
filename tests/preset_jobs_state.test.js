@@ -118,6 +118,23 @@ test("snapshot application disables unmatched rows and restores strengths", () =
   assert.deepEqual(result.missing, []);
 });
 
+test("queued jobs run their snapshot exactly and clear a temporary zero on matched rows", () => {
+  const base = loaderState([
+    { ...entry("a.safetensors", "a"), muted: true },
+    { ...entry("b.safetensors", "b"), muted: true },
+  ]);
+  const snapshot = snapshotFromPreset(preset("p", "Use A", [entry("a.safetensors", "a", 0.45)]));
+
+  const result = applySnapshotToLoaderState(base, snapshot);
+  const rows = result.state.sections[0].loras;
+  assert.deepEqual(rows.map((row) => row.enabled), [true, false]);
+  assert.deepEqual(rows.map((row) => row.strength), [0.45, 1]);
+  assert.deepEqual(rows.map((row) => row.muted), [false, true]);
+  // The substitution is a copy: the visible loader keeps its override.
+  assert.equal(base.sections[0].loras[0].muted, true);
+  assert.equal(result.serialized.includes('"muted":false'), true);
+});
+
 test("changed files, missing entries, duplicate LoRAs, and empty presets are deterministic", () => {
   const base = loaderState([
     entry("same.safetensors", "a"),

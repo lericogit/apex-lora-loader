@@ -14,6 +14,7 @@ import {
   formatStrength,
   insertionIndexFromMidpoints,
   fullPresetStateFromState,
+  isMuted,
   matchesFolderFilters,
   moveRow,
   moveSection,
@@ -28,6 +29,7 @@ import {
   sectionColumn,
   sectionsByVisibleColumn,
   serializeState,
+  setMuted,
   removeTriggerWord,
   strengthFillParts,
   toggleTriggerWord,
@@ -3495,15 +3497,65 @@ function setStrengthFill(input, value) {
 }
 
 
+function toggleRowZero(node, row, autoQueue = false) {
+  setMuted(row, !isMuted(row));
+  commit(node, { presetDirty: true });
+  if (autoQueue) notifyEditorAutoQueue(node);
+}
+
+
+// Right-clicking anywhere on a LoRA row is a shortcut for its zero key, so the
+// override is reachable without aiming at a 15px target. The native menu is
+// suppressed only over rows; the rest of the node keeps ComfyUI's own menu.
+function installZeroContextMenu(node, row, element, autoQueue = false) {
+  element.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleRowZero(node, row, autoQueue);
+  });
+}
+
+
+// The temporary zero belongs to the strength value rather than to the enabled
+// state, so it is a numeral welded to the strength field instead of an icon in
+// the row's icon cluster. It stays hidden until the row is hovered or the
+// override is active, while its cell keeps reserving space so nothing shifts.
+function createZeroToggle(node, row, className = "", autoQueue = false) {
+  const muted = isMuted(row);
+  const button = textIconButton(
+    "0",
+    muted
+      ? `Temporarily zeroed at 0,00. The saved strength of ${formatStrength(row.strength)} is kept.\nClick, or right-click anywhere on the row, to restore it.`
+      : `Temporarily apply this LoRA at 0,00 without disabling it or changing its saved strength.\nRight-clicking anywhere on the row does the same.`,
+  );
+  button.type = "button";
+  button.classList.add("apex-zero", ...(className ? [className] : []));
+  button.classList.toggle("active", muted);
+  button.setAttribute("aria-pressed", muted ? "true" : "false");
+  button.setAttribute(
+    "aria-label",
+    `${muted ? "Restore" : "Temporarily zero"} the strength of ${row.name}`,
+  );
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleRowZero(node, row, autoQueue);
+  });
+  return button;
+}
+
+
 function createStrengthInput(node, row, className = "", autoQueue = false) {
   const input = document.createElement("input");
-  input.className = `apex-strength${className ? ` ${className}` : ""}`;
+  const muted = isMuted(row);
+  input.className = `apex-strength${className ? ` ${className}` : ""}${muted ? " muted" : ""}`;
   input.type = "text";
   input.inputMode = "decimal";
   input.maxLength = 7;
   input.value = formatStrength(row.strength);
   setStrengthFill(input, row.strength);
-  input.title = `Model strength. Drag left or right to adjust by exactly ${node.__apexState.settings.strength_drag_step} per tick; click to type.`;
+  input.title = muted
+    ? `Saved strength, temporarily overridden to 0,00. Drag or type to change the saved value; it stays inactive until the mute is released.`
+    : `Model strength. Drag left or right to adjust by exactly ${node.__apexState.settings.strength_drag_step} per tick; click to type.`;
   input.setAttribute("aria-label", `Model strength for ${row.name}`);
   input.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
@@ -3597,7 +3649,7 @@ function installRowDropTarget(node, section, rows) {
 function buildRow(node, section, row) {
   const element = document.createElement("div");
   const showTriggerButton = node.__apexState.settings.show_trigger_button;
-  element.className = `apex-row${showTriggerButton ? " with-trigger" : ""}${row.enabled ? "" : " disabled"}${row.error ? " error" : ""}`;
+  element.className = `apex-row${showTriggerButton ? " with-trigger" : ""}${row.enabled ? "" : " disabled"}${isMuted(row) ? " muted" : ""}${row.error ? " error" : ""}`;
   element.title = row.error || row.name;
   const handle = document.createElement("span");
   handle.className = "apex-drag apex-row-drag";
@@ -3642,6 +3694,7 @@ function buildRow(node, section, row) {
   name.addEventListener("click", () => showLoraChooser(node, name, section.id, row.id));
 
   const strength = createStrengthInput(node, row, "", true);
+  const zero = createZeroToggle(node, row, "apex-row-zero", true);
 
   const triggerMetadata = normalizeTriggerMetadata(row);
   const triggerCount = triggerMetadata.trigger_words.length;
@@ -3675,7 +3728,8 @@ function buildRow(node, section, row) {
     commit(node, { presetDirty: true, folderSyncDirty: true });
   });
 
-  element.append(handle, enabledCell, name, strength);
+  installZeroContextMenu(node, row, element, true);
+  element.append(handle, enabledCell, name, zero, strength);
   if (trigger) element.appendChild(trigger);
   element.appendChild(remove);
   return element;
@@ -4129,9 +4183,13 @@ function renderPreview(node, summary = previewSummary(node.__apexState)) {
       : "Open the editor to build your LoRA stack";
     list.appendChild(empty);
   } else {
+    // The trigger slot is reserved for the whole list rather than per row, so
+    // every strength field lines up without wasting space when no LoRA in view
+    // has trigger words.
+    const reserveTrigger = summary.rows.some((item) => item.triggerWordCount > 0);
     for (const item of summary.rows) {
       const row = document.createElement("div");
-      row.className = `apex-preview-row${item.effective ? "" : " inactive"}${item.error ? " error" : ""}`;
+      row.className = `apex-preview-row${item.effective ? "" : " inactive"}${item.muted ? " muted" : ""}${item.error ? " error" : ""}`;
       row.setAttribute("aria-label", item.error || `${item.sectionName} / ${item.name}`);
       const main = document.createElement("div");
       main.className = "apex-preview-row-main";
@@ -4145,6 +4203,10 @@ function renderPreview(node, summary = previewSummary(node.__apexState)) {
       name.title = item.error || `${item.sectionName} / ${item.name}`;
       main.append(section, name);
       const sourceRow = rowById(node, item.id);
+      // Both buttons live in a fixed cell of their own instead of trailing the
+      // name, so their position never depends on the LoRA name or row width.
+      const actions = document.createElement("div");
+      actions.className = "apex-preview-actions";
       if (item.triggerWordCount && sourceRow) {
         const trigger = document.createElement("span");
         trigger.classList.add(
@@ -4158,7 +4220,21 @@ function renderPreview(node, summary = previewSummary(node.__apexState)) {
           ? `${item.activeTriggerWordCount} active of ${item.triggerWordCount} saved ${triggerNoun}`
           : `${item.triggerWordCount} saved ${triggerNoun}; none active`);
         attachTriggerPreview(trigger, node, sourceRow);
-        main.appendChild(trigger);
+        actions.appendChild(trigger);
+      } else if (reserveTrigger) {
+        const spacer = document.createElement("span");
+        spacer.className = "apex-preview-trigger placeholder";
+        spacer.setAttribute("aria-hidden", "true");
+        actions.appendChild(spacer);
+      }
+      if (sourceRow) {
+        actions.appendChild(createZeroToggle(node, sourceRow, "apex-preview-zero"));
+        installZeroContextMenu(node, sourceRow, row);
+      } else {
+        const spacer = document.createElement("span");
+        spacer.className = "apex-zero apex-preview-zero placeholder";
+        spacer.setAttribute("aria-hidden", "true");
+        actions.appendChild(spacer);
       }
       const strength = sourceRow
         ? createStrengthInput(node, sourceRow, "apex-preview-strength")
@@ -4167,7 +4243,7 @@ function renderPreview(node, summary = previewSummary(node.__apexState)) {
         strength.className = "apex-preview-strength";
         strength.textContent = formatStrength(item.strength);
       }
-      row.append(main, strength);
+      row.append(main, actions, strength);
       list.appendChild(row);
     }
     if (summary.overflow) {

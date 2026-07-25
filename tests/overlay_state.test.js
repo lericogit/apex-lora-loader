@@ -70,6 +70,30 @@ test("preview caps rows and surfaces errors, inactive strengths, and trigger cou
 });
 
 
+test("preview reports a muted row as enabled but not effective", () => {
+  const summary = previewSummary({
+    sections: [
+      section("a", "LoRAs", false, [
+        row("muted", true, 0.85, { muted: true }),
+        row("plain", true, 0.85),
+        row("off", false, 1, { muted: true }),
+      ]),
+    ],
+  });
+
+  assert.deepEqual(summary.rows.map((entry) => entry.id), ["muted", "plain"]);
+  assert.equal(summary.enabledRows, 2);
+  assert.equal(summary.effectiveRows, 1);
+  assert.equal(summary.mutedRows, 1);
+  assert.equal(summary.rows[0].muted, true);
+  assert.equal(summary.rows[0].effective, false);
+  // The configured strength stays visible while the override is active.
+  assert.equal(summary.rows[0].strength, 0.85);
+  assert.equal(summary.rows[1].muted, false);
+  assert.equal(summary.rows[1].effective, true);
+});
+
+
 test("preview shows up to twenty enabled rows by default", () => {
   const summary = previewSummary({
     sections: [

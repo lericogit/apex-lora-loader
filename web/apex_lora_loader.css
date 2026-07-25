@@ -16,6 +16,7 @@
   --apex-text-dim: #879394;
   --apex-error: #f07170;
   --apex-error-soft: #ffb3b0;
+  --apex-mute: #d6a85c;
   --apex-border: rgba(255, 255, 255, .08);
   --apex-border-strong: rgba(223, 226, 236, .42);
   --apex-shadow: 0 12px 35px rgba(0, 0, 0, .42);
@@ -538,7 +539,7 @@
 .apex-row {
   box-sizing: border-box;
   display: grid;
-  grid-template-columns: 24px 20px minmax(100px, 1fr) 60px 30px;
+  grid-template-columns: 24px 20px minmax(100px, 1fr) 22px 60px 30px;
   gap: 0;
   align-items: stretch;
   min-height: 28px;
@@ -551,7 +552,7 @@
   overflow: hidden;
   transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
 }
-.apex-row.with-trigger { grid-template-columns: 24px 20px minmax(100px, 1fr) 60px 30px 30px; }
+.apex-row.with-trigger { grid-template-columns: 24px 20px minmax(100px, 1fr) 22px 60px 30px 30px; }
 .apex-row:last-child { margin-bottom: 0; }
 .apex-row:hover:not(.disabled):not(.error),
 .apex-row:focus-within:not(.disabled):not(.error) {
@@ -679,6 +680,16 @@
     linear-gradient(var(--apex-strength-direction), var(--apex-strength-color) 0 var(--apex-strength-fill, 0%), transparent var(--apex-strength-fill, 0%) 100%),
     transparent !important;
 }
+.apex-strength.muted {
+  --apex-strength-color: rgba(150, 160, 166, .16);
+  --apex-strength-block-color: rgba(170, 180, 186, .34);
+  color: var(--apex-text-dim);
+  text-decoration: line-through;
+  text-decoration-color: rgba(214, 168, 92, .68);
+  text-decoration-thickness: 1px;
+}
+.apex-strength.muted:focus,
+.apex-strength.muted.dragging { color: var(--apex-text-soft); text-decoration: none; }
 .apex-strength:hover { background-color: rgba(255, 255, 255, .04) !important; }
 .apex-strength.scrubbing { caret-color: transparent; user-select: none; }
 .apex-strength.scrubbing::selection { background: transparent; color: inherit; }
@@ -696,6 +707,34 @@
 .apex-strength.negative:focus,
 .apex-strength.negative.dragging { color: #ffdad8; }
 .apex-row.disabled .apex-strength { color: var(--apex-text-dim); background: transparent !important; }
+.apex-row.muted {
+  border-color: rgba(214, 168, 92, .34);
+  background: rgba(214, 168, 92, .045);
+}
+.apex-row.muted .apex-lora-name { color: var(--apex-text-dim); }
+/* The zero key is welded to the strength field and stays out of sight until the
+   row is hovered or the override is active. Its cell keeps its width either
+   way, so no control ever shifts position. */
+.apex-row .apex-row-zero {
+  color: var(--apex-text-dim);
+  font: 500 11px/14px var(--apex-code-font) !important;
+  opacity: 0;
+  transition: opacity 110ms ease, color 110ms ease, background-color 110ms ease;
+}
+.apex-row:hover .apex-row-zero,
+.apex-row:focus-within .apex-row-zero,
+.apex-row .apex-row-zero:focus-visible,
+.apex-row .apex-row-zero.active { opacity: 1; }
+.apex-row .apex-row-zero:hover,
+.apex-row .apex-row-zero:focus-visible {
+  color: var(--apex-mute);
+  background: rgba(214, 168, 92, .1);
+}
+.apex-row .apex-row-zero.active,
+.apex-row:hover .apex-row-zero.active {
+  color: var(--apex-mute);
+  background: rgba(214, 168, 92, .13);
+}
 .apex-row.error .apex-strength {
   border-left-color: rgba(240, 113, 112, .28) !important;
   color: var(--apex-text-soft);
@@ -1774,8 +1813,8 @@
   .apex-section-count { display: none; }
   .apex-section-name { font-size: 13px !important; }
   .apex-rows { padding: 5px; }
-  .apex-row { grid-template-columns: 22px 18px minmax(70px, 1fr) 50px 27px; }
-  .apex-row.with-trigger { grid-template-columns: 22px 18px minmax(70px, 1fr) 50px 27px 27px; }
+  .apex-row { grid-template-columns: 22px 18px minmax(70px, 1fr) 20px 50px 27px; }
+  .apex-row.with-trigger { grid-template-columns: 22px 18px minmax(70px, 1fr) 20px 50px 27px 27px; }
   .apex-strength { width: 50px; padding-inline: 3px; }
   .apex-lora-name { padding-inline: 5px; }
   .apex-lora-name .path { display: none; }

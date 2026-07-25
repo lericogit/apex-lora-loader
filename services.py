@@ -722,6 +722,9 @@ class PresetStore:
         strength = float(strength)
         if not math.isfinite(strength) or strength < -100 or strength > 100:
             raise ValueError(f"Preset strength for '{name}' must be between -100 and 100.")
+        muted = row.get("muted", False)
+        if not isinstance(muted, bool):
+            raise ValueError(f"Muted state for '{name}' must be true or false.")
         digest, size = validate_identity(row)
         trigger_words, active_trigger_words = normalize_trigger_metadata(row)
         trigger_position = row.get("trigger_position", "append")
@@ -732,6 +735,7 @@ class PresetStore:
             "name": name,
             "enabled": enabled,
             "strength": round(strength, 2),
+            "muted": muted,
             "sha256": digest,
             "size": size,
             "trigger_words": trigger_words,

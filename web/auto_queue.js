@@ -7,10 +7,13 @@ export function activeLoraSignature(state) {
     for (const row of section?.loras || []) {
       if (row?.enabled !== true) continue;
       const strength = Number(row.strength);
+      const stored = Number.isFinite(strength) ? Math.round(strength * 100) / 100 : 0;
       active.push([
         typeof row.id === "string" ? row.id : "",
         typeof row.name === "string" ? row.name : "",
-        Number.isFinite(strength) ? Math.round(strength * 100) / 100 : 0,
+        // The signature tracks the effective strength so toggling the temporary
+        // zero re-queues exactly like editing the value would.
+        row.muted === true ? 0 : stored,
       ]);
     }
   }

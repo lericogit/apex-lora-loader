@@ -9,8 +9,10 @@ import {
   applyPreset,
   createSection,
   formatStrength,
+  effectiveStrength,
   insertionIndexFromMidpoints,
   fullPresetStateFromState,
+  isMuted,
   matchesFolderFilters,
   moveRow,
   moveSection,
@@ -23,6 +25,7 @@ import {
   responsiveColumnCount,
   sectionsByVisibleColumn,
   serializeState,
+  setMuted,
   strengthFillParts,
   strengthFromDrag,
   toggleSectionRows,
@@ -451,6 +454,78 @@ test("duplicate identities are matched in row order and transient errors are not
 });
 
 
+test("the temporary zero override derives an effective strength without rewriting it", () => {
+  const state = sampleState();
+  const [target] = state.sections[0].loras;
+  target.strength = 0.85;
+
+  assert.equal(isMuted(target), false);
+  assert.equal(effectiveStrength(target), 0.85);
+
+  assert.equal(setMuted(target, true), true);
+  assert.equal(setMuted(target, true), false);
+  assert.equal(isMuted(target), true);
+  assert.equal(target.strength, 0.85);
+  assert.equal(target.enabled, true);
+  assert.equal(effectiveStrength(target), 0);
+
+  // Editing the stored strength while muted keeps the effective value at zero.
+  target.strength = 0.4;
+  assert.equal(effectiveStrength(target), 0);
+
+  assert.equal(setMuted(target, false), true);
+  assert.equal(effectiveStrength(target), 0.4);
+});
+
+
+test("the temporary zero override survives serialization, reordering, and legacy states", () => {
+  const state = sampleState();
+  state.sections[0].loras[0].muted = true;
+
+  const restored = normalizeState(serializeState(state));
+  assert.equal(restored.sections[0].loras[0].muted, true);
+  assert.equal(restored.sections[0].loras[0].strength, 1);
+  assert.equal(restored.sections[0].loras[1].muted, false);
+
+  // The flag travels with its row instead of its position.
+  moveRow(restored, "a", "s2", 0);
+  assert.equal(restored.sections[1].loras[0].id, "a");
+  assert.equal(restored.sections[1].loras[0].muted, true);
+
+  // States saved before the feature existed load as unmuted.
+  const legacy = normalizeState(JSON.stringify({
+    version: 1,
+    folder_filters: null,
+    active_preset_id: null,
+    sections: [{ id: "s1", name: "One", collapsed: false, loras: [
+      { id: "a", name: "root.safetensors", sha256: "a".repeat(64), size: 4, enabled: true, strength: 1 },
+    ] }],
+  }));
+  assert.equal(legacy.sections[0].loras[0].muted, false);
+  assert.equal(normalizeState({ ...state, sections: [{ id: "s", name: "S", loras: [{ name: "n.safetensors", muted: "yes" }] }] })
+    .sections[0].loras[0].muted, false);
+});
+
+
+test("applying an active preset clears the temporary zero on matched rows only", () => {
+  const state = sampleState();
+  state.sections[0].loras[0].muted = true;
+  state.sections[1].loras[0].muted = true;
+
+  const result = applyPreset(state, {
+    id: "preset",
+    entries: [{ name: "root.safetensors", sha256: "a".repeat(64), strength: 0.35 }],
+  });
+
+  assert.deepEqual(result, { matched: 1, missing: 0 });
+  assert.equal(state.sections[0].loras[0].enabled, true);
+  assert.equal(state.sections[0].loras[0].strength, 0.35);
+  assert.equal(state.sections[0].loras[0].muted, false);
+  // An unmatched row keeps its override alongside its disabled state.
+  assert.equal(state.sections[1].loras[0].muted, true);
+});
+
+
 test("full preset snapshots preserve the complete normalized setup only", () => {
   const state = sampleState();
   state.active_preset_id = "currently-selected";
@@ -493,6 +568,7 @@ test("full preset snapshots preserve the complete normalized setup only", () => 
   assert.equal(snapshot.sections[0].column, 1);
   assert.equal(snapshot.sections[0].loras[0].enabled, false);
   assert.equal(snapshot.sections[0].loras[0].strength, 0.46);
+  assert.equal(snapshot.sections[0].loras[0].muted, false);
   assert.deepEqual(snapshot.sections[0].loras[0].active_trigger_words, ["detail"]);
   assert.equal(snapshot.sections[0].loras[0].trigger_position, "prepend");
   assert.equal("active_preset_id" in snapshot, false);

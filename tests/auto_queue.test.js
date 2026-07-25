@@ -64,6 +64,26 @@ test("active LoRA signatures include execution order and normalized active stren
 });
 
 
+test("active LoRA signatures follow the effective strength of muted rows", () => {
+  const state = stateWithRows([
+    { id: "one", name: "a.safetensors", enabled: true, strength: 0.85 },
+  ]);
+  const unmuted = activeLoraSignature(state);
+
+  state.sections[0].loras[0].muted = true;
+  const muted = activeLoraSignature(state);
+  assert.notEqual(muted, unmuted);
+  assert.equal(muted, JSON.stringify([["one", "a.safetensors", 0]]));
+
+  // Editing the stored strength while muted must not re-queue.
+  state.sections[0].loras[0].strength = 0.4;
+  assert.equal(activeLoraSignature(state), muted);
+
+  state.sections[0].loras[0].muted = false;
+  assert.equal(activeLoraSignature(state), JSON.stringify([["one", "a.safetensors", 0.4]]));
+});
+
+
 test("auto queue debounces changes and submits only the newest settled state", async () => {
   const timers = fakeTimers();
   const state = stateWithRows([{ id: "one", name: "a", enabled: false, strength: 1 }]);

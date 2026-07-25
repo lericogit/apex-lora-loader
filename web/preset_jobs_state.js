@@ -209,6 +209,9 @@ export function applySnapshotToLoaderState(baseValue, snapshot) {
     used.add(index);
     rows[index].enabled = true;
     rows[index].strength = normalizeStrength(entry.strength);
+    // Queued jobs must run their frozen snapshot exactly. A temporary zero left
+    // on the visible loader row is cleared in this substituted copy only.
+    rows[index].muted = false;
   }
   state.active_preset_id = null;
   return {

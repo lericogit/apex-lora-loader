@@ -7,7 +7,7 @@
 Organize, filter, reorder, preset, recover, and annotate large LoRA stacks in one compact node.
 
 [![License: MIT][license-shield]][license-link]
-[![Version: v0.4.1][version-shield]][version-link]
+[![Version: v0.5.0][version-shield]][version-link]
 [![ComfyUI Custom Node][comfyui-shield]][comfyui-link]
 [![Local only][local-shield]][local-link]
 [![No extra packages][dependencies-shield]][dependencies-link]
@@ -54,11 +54,12 @@ The node intentionally has no CLIP socket. LoRAs are applied to `MODEL` with zer
 - SHA-256 identities that recover LoRAs after file or folder renames.
 - Multiple active trigger words per LoRA with per-row prepend or append placement.
 - Two-decimal strengths and configurable horizontal drag increments.
+- A per-row temporary zero key that silences a LoRA from the node without disabling it or losing its strength.
 - Local-only storage, atomic JSON writes, and no persistent tensor cache.
 
 ### Stack and sections
 
-Each LoRA occupies one compact row containing a drag handle, enable toggle, searchable chooser, strength input, optional trigger-word control, and remove action.
+Each LoRA occupies one compact row containing a drag handle, enable toggle, searchable chooser, strength input with its temporary zero key, optional trigger-word control, and remove action.
 
 Sections have stable identities, editable names, enabled counts, collapse controls, one-click all/none toggles, and guarded deletion. Drag sections vertically within a column or horizontally between columns. LoRA rows can be reordered or moved between sections, with a visible insertion marker across the full drop area. Visual order is also execution order: columns run left to right, and each column runs top to bottom.
 
@@ -124,6 +125,23 @@ The strength field visualizes the decimal portion as a continuous fill and the w
 - Click and type an exact value.
 - Hold the left mouse button and drag horizontally.
 - Configure the drag step from `0.01` to `100`, also limited to two decimals.
+
+### Temporary zero
+
+Each LoRA row carries a compact `0` key immediately left of its strength field, on the node and in the overlay alike. It separates the **actual strength** you configured from the **effective strength** that is executed:
+
+| State | Actual strength | Effective strength |
+| --- | --- | --- |
+| Normal | `0,85` | `0,85` |
+| Temporary zero | `0,85` | `0,00` |
+
+The key stays out of sight until you hover its row, and remains visible in amber for as long as the override is active. Its slot is always reserved, so no control ever changes position. Right-clicking anywhere on a LoRA row does the same thing, so the override never requires aiming at the small key; its tooltip names the shortcut. Because it belongs to the strength value rather than to the enabled state, it sits inside the strength unit instead of the row's icon cluster: the enable checkbox remains the only permanent control, and only the trigger and remove icons stay in the icon group.
+
+The override never disables the row, removes it from the stack, or rewrites its stored value. A zeroed row keeps its place and its saved strength, shows an amber outline with a struck-through value, and contributes neither a model patch nor its trigger words. Releasing the override immediately restores the latest actual strength, including edits made while it was active.
+
+The state belongs to the row, so it follows reordering, section moves, rename recovery, folder sync, and workflow save and reload. Because it changes what actually runs, it also counts as a change for Run on Change.
+
+Applying an Active LoRAs preset clears the override on the rows that preset matches, and queued Preset Jobs always run their frozen snapshot at full strength, so a forgotten mute can never silently alter a restored combination or a batch of experiments. Full setup presets store the override alongside the rest of the node.
 
 ### Smart global presets
 
@@ -283,7 +301,7 @@ Embedded Lucide icons retain their ISC terms, and Feather-derived Lucide icons r
 
 [license-shield]: https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square
 [license-link]: LICENSE
-[version-shield]: https://img.shields.io/badge/version-v0.4.1-1f6feb?style=flat-square
+[version-shield]: https://img.shields.io/badge/version-v0.5.0-1f6feb?style=flat-square
 [version-link]: https://github.com/lericogit/apex-lora-loader/releases
 [comfyui-shield]: https://img.shields.io/badge/ComfyUI-custom_node-6f42c1?style=flat-square
 [comfyui-link]: https://github.com/Comfy-Org/ComfyUI

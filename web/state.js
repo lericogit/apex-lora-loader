@@ -28,6 +28,23 @@ export function formatStrength(value) {
   return normalizeStrength(value, 0).toFixed(2).replace(".", ",");
 }
 
+export function isMuted(row) {
+  return row?.muted === true;
+}
+
+// The stored strength is never rewritten by the temporary zero override, so the
+// effective value is derived wherever execution, prompts, or metrics matter.
+export function effectiveStrength(row) {
+  return isMuted(row) ? 0 : normalizeStrength(row?.strength, 0);
+}
+
+export function setMuted(row, muted) {
+  const next = muted === true;
+  if (!row || row.muted === next) return false;
+  row.muted = next;
+  return true;
+}
+
 export function parseStrengthInput(value) {
   const normalized = String(value).trim().replace(",", ".");
   if (!normalized) return null;
@@ -177,6 +194,7 @@ export function createRow(identity) {
     name: identity.name,
     enabled: true,
     strength: 1,
+    muted: false,
     sha256: identity.sha256,
     size: identity.size,
     ...triggerMetadata,
@@ -219,6 +237,7 @@ export function normalizeState(value) {
             name: row.name.replaceAll("\\", "/"),
             enabled: row.enabled === true,
             strength: normalizeStrength(row.strength),
+            muted: row.muted === true,
             sha256: typeof row.sha256 === "string" ? row.sha256 : "",
             size: Number.isInteger(row.size) && row.size >= 0 ? row.size : 0,
             ...normalizeTriggerMetadata(row),
@@ -481,6 +500,9 @@ export function applyPreset(state, preset) {
     used.add(index);
     rows[index].enabled = true;
     rows[index].strength = normalizeStrength(entry.strength);
+    // A preset restores an exact combination, so a leftover temporary zero must
+    // not silently keep a restored LoRA out of the run.
+    rows[index].muted = false;
     matched += 1;
   }
   state.active_preset_id = preset.id;

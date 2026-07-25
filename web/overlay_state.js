@@ -29,6 +29,7 @@ export function previewSummary(state, { limit = DEFAULT_PREVIEW_ROW_LIMIT } = {}
   let enabledRows = 0;
   let enabledSections = 0;
   let effectiveRows = 0;
+  let mutedRows = 0;
   let errorRows = 0;
 
   for (const section of sections) {
@@ -40,7 +41,10 @@ export function previewSummary(state, { limit = DEFAULT_PREVIEW_ROW_LIMIT } = {}
       sectionEnabled = true;
       enabledRows += 1;
       const strength = finiteStrength(row.strength);
-      if (strength !== 0) effectiveRows += 1;
+      const muted = row.muted === true;
+      const effective = !muted && strength !== 0;
+      if (effective) effectiveRows += 1;
+      if (muted) mutedRows += 1;
       if (row.error) errorRows += 1;
       if (visibleRows.length < safeLimit) {
         const triggerMetadata = normalizeTriggerMetadata(row);
@@ -50,7 +54,8 @@ export function previewSummary(state, { limit = DEFAULT_PREVIEW_ROW_LIMIT } = {}
           sectionId: String(section.id ?? ""),
           sectionName: String(section.name ?? ""),
           strength,
-          effective: strength !== 0,
+          muted,
+          effective,
           error: row.error ? String(row.error) : "",
           triggerWordCount: triggerMetadata.trigger_words.length,
           activeTriggerWordCount: triggerMetadata.active_trigger_words.length,
@@ -66,6 +71,7 @@ export function previewSummary(state, { limit = DEFAULT_PREVIEW_ROW_LIMIT } = {}
     totalRows,
     enabledRows,
     effectiveRows,
+    mutedRows,
     errorRows,
     rows: visibleRows,
     overflow: Math.max(0, enabledRows - visibleRows.length),
