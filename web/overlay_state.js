@@ -21,9 +21,21 @@ export function previewDisplayName(name, settings = {}) {
 }
 
 
-export function previewSummary(state, { limit = DEFAULT_PREVIEW_ROW_LIMIT } = {}) {
+export function previewRowLimit(settings) {
+  return settings?.show_all_enabled_loras === true
+    ? Infinity
+    : DEFAULT_PREVIEW_ROW_LIMIT;
+}
+
+
+export function previewSummary(state, { limit } = {}) {
   const sections = Array.isArray(state?.sections) ? state.sections : [];
-  const safeLimit = Math.max(0, Math.trunc(Number(limit) || 0));
+  // An explicit limit always wins so callers and tests stay in control; the
+  // node's own setting only decides the default.
+  const requested = limit === undefined ? previewRowLimit(state?.settings) : limit;
+  const safeLimit = requested === Infinity
+    ? Infinity
+    : Math.max(0, Math.trunc(Number(requested) || 0));
   const visibleRows = [];
   let totalRows = 0;
   let enabledRows = 0;

@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { previewDisplayName, previewSummary } from "../web/overlay_state.js";
+import {
+  DEFAULT_PREVIEW_ROW_LIMIT,
+  previewDisplayName,
+  previewRowLimit,
+  previewSummary,
+} from "../web/overlay_state.js";
 
 
 function section(id, name, collapsed, loras) {
@@ -109,6 +114,58 @@ test("preview shows up to twenty enabled rows by default", () => {
   assert.equal(summary.enabledRows, 23);
   assert.equal(summary.rows.length, 20);
   assert.equal(summary.overflow, 3);
+});
+
+
+test("the show all setting lists every enabled row without an overflow hint", () => {
+  const sections = [
+    section(
+      "a",
+      "LoRAs",
+      false,
+      Array.from({ length: 139 }, (_, index) => row(`row-${index + 1}`, index < 26, 1)),
+    ),
+  ];
+
+  const capped = previewSummary({ sections, settings: {} });
+  assert.equal(capped.rows.length, DEFAULT_PREVIEW_ROW_LIMIT);
+  assert.equal(capped.overflow, 6);
+
+  const full = previewSummary({
+    sections,
+    settings: { show_all_enabled_loras: true },
+  });
+  assert.equal(full.enabledRows, 26);
+  assert.equal(full.rows.length, 26);
+  assert.equal(full.overflow, 0);
+  assert.equal(full.totalRows, 139);
+});
+
+
+test("an explicit limit still overrides the show all setting", () => {
+  const state = {
+    sections: [
+      section("a", "LoRAs", false, [
+        row("one", true, 1),
+        row("two", true, 1),
+        row("three", true, 1),
+      ]),
+    ],
+    settings: { show_all_enabled_loras: true },
+  };
+
+  const summary = previewSummary(state, { limit: 1 });
+  assert.equal(summary.rows.length, 1);
+  assert.equal(summary.overflow, 2);
+});
+
+
+test("previewRowLimit reports the default cap unless the setting is enabled", () => {
+  assert.equal(previewRowLimit(undefined), DEFAULT_PREVIEW_ROW_LIMIT);
+  assert.equal(previewRowLimit({}), DEFAULT_PREVIEW_ROW_LIMIT);
+  assert.equal(previewRowLimit({ show_all_enabled_loras: false }), DEFAULT_PREVIEW_ROW_LIMIT);
+  assert.equal(previewRowLimit({ show_all_enabled_loras: "yes" }), DEFAULT_PREVIEW_ROW_LIMIT);
+  assert.equal(previewRowLimit({ show_all_enabled_loras: true }), Infinity);
 });
 
 

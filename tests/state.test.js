@@ -233,6 +233,7 @@ test("node display settings normalize and serialize with safe defaults", () => {
     show_safetensors: false,
     show_folder_paths: false,
     show_trigger_button: true,
+    show_all_enabled_loras: true,
     strength_drag_step: 0.05,
     overlay_scale: 0.75,
     run_on_change_enabled: true,
@@ -252,12 +253,15 @@ test("node display settings normalize and serialize with safe defaults", () => {
   assert.equal(normalizeState(state).settings.run_on_change_delay_ms, 452);
   state.settings.run_on_change_delay_ms = 9000;
   assert.equal(normalizeState(state).settings.run_on_change_delay_ms, 5000);
+  state.settings.show_all_enabled_loras = "yes";
+  assert.equal(normalizeState(state).settings.show_all_enabled_loras, false);
 
   delete state.settings;
   assert.deepEqual(normalizeState(state).settings, {
     show_safetensors: true,
     show_folder_paths: true,
     show_trigger_button: false,
+    show_all_enabled_loras: false,
     strength_drag_step: 0.01,
     overlay_scale: 0.88,
     run_on_change_enabled: false,
@@ -557,6 +561,7 @@ test("full preset snapshots preserve the complete normalized setup only", () => 
     show_safetensors: false,
     show_folder_paths: true,
     show_trigger_button: true,
+    show_all_enabled_loras: false,
     strength_drag_step: 0.06,
     overlay_scale: 0.82,
     run_on_change_enabled: true,

@@ -201,6 +201,12 @@ The row tag button is hidden by default and can be enabled in Settings.
   <sub>Add, remove, and independently activate trigger words, then place them before or after the incoming prompt.</sub>
 </p>
 
+### Node preview
+
+The node itself shows a compact read-only summary of the stack: section and LoRA counts, and one line per enabled LoRA with its strength and temporary zero key. Editing happens in the overlay editor opened from the node.
+
+By default the list shows the first twenty enabled LoRAs and closes with a `+N more enabled` hint. Enable **List every enabled LoRA** in Settings to list all of them instead. The list scrolls either way, so a taller node simply shows more rows at once. The setting is stored per node and is saved with Full setup presets.
+
 ### Settings
 
 The compact settings popup provides per-node controls for:
@@ -208,6 +214,7 @@ The compact settings popup provides per-node controls for:
 - Showing or hiding the `.safetensors` extension.
 - Showing full relative paths or only LoRA filenames.
 - Showing or hiding trigger-word buttons.
+- Listing every enabled LoRA on the node instead of the first twenty.
 - Setting the strength drag increment.
 - Previewing saved hashes and trigger-word metadata.
 - Deleting individual saved identity records directly from the metadata list.

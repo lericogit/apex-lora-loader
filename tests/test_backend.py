@@ -509,6 +509,7 @@ class BackendTests(unittest.TestCase):
                         "show_safetensors": False,
                         "show_folder_paths": True,
                         "show_trigger_button": True,
+                        "show_all_enabled_loras": True,
                         "strength_drag_step": 0.057,
                         "overlay_scale": 0.823,
                         "run_on_change_enabled": True,
@@ -605,6 +606,7 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(saved["state"]["settings"]["overlay_scale"], 0.82)
             self.assertTrue(saved["state"]["settings"]["run_on_change_enabled"])
             self.assertEqual(saved["state"]["settings"]["run_on_change_delay_ms"], 452)
+            self.assertTrue(saved["state"]["settings"]["show_all_enabled_loras"])
             self.assertEqual(
                 [section["id"] for section in saved["state"]["sections"]],
                 ["section-two", "section-one"],

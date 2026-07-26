@@ -37,7 +37,11 @@ import {
   toggleSectionRows,
 } from "./state.js";
 import { createSingleOwnerController } from "./overlay_controller.js";
-import { previewDisplayName, previewSummary } from "./overlay_state.js";
+import {
+  DEFAULT_PREVIEW_ROW_LIMIT,
+  previewDisplayName,
+  previewSummary,
+} from "./overlay_state.js";
 import { activeLoraSignature, createAutoQueueController } from "./auto_queue.js";
 import {
   addIgnoredIdentity,
@@ -2371,9 +2375,10 @@ function showNodeSettings(node, anchor) {
   const fields = document.createElement("div");
   fields.className = "apex-settings-list";
 
-  const toggle = (text, checked) => {
+  const toggle = (text, checked, title = "") => {
     const label = document.createElement("label");
     label.className = "apex-setting-row";
+    if (title) label.title = title;
     const name = document.createElement("span");
     name.textContent = text;
     const input = document.createElement("input");
@@ -2387,6 +2392,11 @@ function showNodeSettings(node, anchor) {
   const showSafetensors = toggle("Show .safetensors", settings.show_safetensors);
   const showFolderPaths = toggle("Show folder paths", settings.show_folder_paths);
   const showTriggerButton = toggle("Show trigger-word button", settings.show_trigger_button);
+  const showAllEnabledLoras = toggle(
+    "List every enabled LoRA",
+    settings.show_all_enabled_loras,
+    `List every enabled LoRA on the node instead of the first ${DEFAULT_PREVIEW_ROW_LIMIT}. The list scrolls, so resize the node to see more at once.`,
+  );
   const stepRow = document.createElement("label");
   stepRow.className = "apex-setting-row";
   const stepLabel = document.createElement("span");
@@ -2571,6 +2581,7 @@ function showNodeSettings(node, anchor) {
     showSafetensors.checked = DEFAULT_SETTINGS.show_safetensors;
     showFolderPaths.checked = DEFAULT_SETTINGS.show_folder_paths;
     showTriggerButton.checked = DEFAULT_SETTINGS.show_trigger_button;
+    showAllEnabledLoras.checked = DEFAULT_SETTINGS.show_all_enabled_loras;
     dragStep.value = String(DEFAULT_SETTINGS.strength_drag_step);
     autoQueueDelay.value = String(DEFAULT_SETTINGS.run_on_change_delay_ms);
     overlayScale.value = String(Math.round(DEFAULT_SETTINGS.overlay_scale * 100));
@@ -2594,10 +2605,14 @@ function showNodeSettings(node, anchor) {
       overlayScale.focus();
       return;
     }
+    // Spread the current settings so keys this popup does not edit, such as the
+    // Run on change toggle owned by the editor header, survive an Apply.
     node.__apexState.settings = normalizeSettings({
+      ...node.__apexState.settings,
       show_safetensors: showSafetensors.checked,
       show_folder_paths: showFolderPaths.checked,
       show_trigger_button: showTriggerButton.checked,
+      show_all_enabled_loras: showAllEnabledLoras.checked,
       strength_drag_step: step,
       run_on_change_delay_ms: delayMs,
       overlay_scale: scalePercent / 100,
@@ -4323,6 +4338,7 @@ function renderPreview(node, summary = previewSummary(node.__apexState)) {
       const more = document.createElement("div");
       more.className = "apex-preview-more";
       more.textContent = `+${summary.overflow} more enabled`;
+      more.title = `Only the first ${DEFAULT_PREVIEW_ROW_LIMIT} enabled LoRAs are listed. Enable "List every enabled LoRA" in the editor's node settings to show all of them.`;
       list.appendChild(more);
     }
   }

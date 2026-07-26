@@ -503,6 +503,7 @@ class PresetStore:
             "show_safetensors": settings.get("show_safetensors") is not False,
             "show_folder_paths": settings.get("show_folder_paths") is not False,
             "show_trigger_button": settings.get("show_trigger_button") is True,
+            "show_all_enabled_loras": settings.get("show_all_enabled_loras") is True,
             "strength_drag_step": round(drag_step, 2),
             "overlay_scale": round(overlay_scale, 2),
             "run_on_change_enabled": settings.get("run_on_change_enabled") is True,
