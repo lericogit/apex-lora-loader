@@ -535,6 +535,11 @@ class BackendTests(unittest.TestCase):
                                     "folder\\sub",
                                     "folder/sub",
                                 ],
+                                "include_direct": [
+                                    "folder\\direct",
+                                    "folder/direct",
+                                ],
+                                "exclude_direct": ["folder\\sub\\direct"],
                                 "seen_names": [
                                     "seen\\first.safetensors",
                                     "seen/first.safetensors",
@@ -639,6 +644,8 @@ class BackendTests(unittest.TestCase):
                     "mode": "new",
                     "include_folders": ["folder", "folder/sub/deep"],
                     "exclude_folders": ["folder/sub"],
+                    "include_direct": ["folder/direct"],
+                    "exclude_direct": ["folder/sub/direct"],
                     "seen_names": ["seen/first.safetensors"],
                     "ignored": [
                         {
@@ -667,6 +674,8 @@ class BackendTests(unittest.TestCase):
                     "mode": "mirror",
                     "include_folders": [],
                     "exclude_folders": [],
+                    "include_direct": [],
+                    "exclude_direct": [],
                     "seen_names": [],
                     "ignored": [],
                 },
@@ -733,6 +742,8 @@ class BackendTests(unittest.TestCase):
                 "mode": "mirror",
                 "include_folders": [],
                 "exclude_folders": [],
+                "include_direct": [],
+                "exclude_direct": [],
                 "seen_names": [],
                 "ignored": [],
             }
@@ -741,6 +752,40 @@ class BackendTests(unittest.TestCase):
                 store.read()["presets"][0]["state"]["sections"][0]["folder_sync"],
                 expected,
             )
+
+    def test_full_preset_roundtrips_compact_folder_tree_rules(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = services.PresetStore(str(Path(directory) / "presets.json"))
+            saved = store.upsert({
+                "name": "Folder rules",
+                "type": "full",
+                "state": {
+                    "version": 1,
+                    "folder_filters": {
+                        "default_selected": True,
+                        "include_folders": ["characters\\selected"],
+                        "exclude_folders": ["characters\\private"],
+                        "include_direct": ["styles"],
+                        "exclude_direct": ["characters"],
+                    },
+                    "settings": {},
+                    "sections": [{
+                        "id": "section",
+                        "name": "Section",
+                        "collapsed": False,
+                        "column": 0,
+                        "loras": [],
+                    }],
+                },
+            })
+
+            self.assertEqual(saved["state"]["folder_filters"], {
+                "default_selected": True,
+                "include_folders": ["characters/selected"],
+                "exclude_folders": ["characters/private"],
+                "include_direct": ["styles"],
+                "exclude_direct": ["characters"],
+            })
 
     def test_full_preset_accepts_large_new_only_baseline(self):
         seen_names = [f"catalog/{index}.safetensors" for index in range(3000)]
@@ -800,13 +845,20 @@ class BackendTests(unittest.TestCase):
             {"include_folders": [3]},
             {"include_folders": ["folder/../outside"]},
             {"exclude_folders": [None]},
+            {"include_direct": "folder"},
+            {"include_direct": [3]},
+            {"include_direct": ["folder/../outside"]},
+            {"exclude_direct": [None]},
             {"seen_names": [""]},
             {"include_folders": ["folder"], "exclude_folders": ["folder"]},
+            {"include_direct": ["folder"], "exclude_direct": ["folder"]},
             {"ignored": "A.safetensors"},
             {"ignored": ["not-an-object"]},
             {"ignored": [{"name": "", "sha256": "a" * 64, "size": 1}]},
             {"include_folders": [f"folder/{index}" for index in range(3)]},
             {"exclude_folders": [f"folder/{index}" for index in range(3)]},
+            {"include_direct": [f"folder/{index}" for index in range(3)]},
+            {"exclude_direct": [f"folder/{index}" for index in range(3)]},
             {"seen_names": [f"{index}.safetensors" for index in range(3)]},
             {
                 "ignored": [{

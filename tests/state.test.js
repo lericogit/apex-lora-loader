@@ -57,6 +57,16 @@ test("folder filters support root, multiple folders, and recursive prefixes", ()
   assert.equal(matchesFolderFilters("x/y/a.safetensors", ["x"]), true);
   assert.equal(matchesFolderFilters("z/a.safetensors", ["x", "styles"]), false);
   assert.equal(matchesFolderFilters("x/a.safetensors", []), false);
+  assert.equal(matchesFolderFilters("x/direct.safetensors", {
+    default_selected: false,
+    include_folders: ["x"],
+    exclude_direct: ["x"],
+  }), false);
+  assert.equal(matchesFolderFilters("x/future/a.safetensors", {
+    default_selected: false,
+    include_folders: ["x"],
+    exclude_direct: ["x"],
+  }), true);
 });
 
 
@@ -68,6 +78,8 @@ test("legacy sections gain disabled folder sync and serialize configured rules",
     mode: "mirror",
     include_folders: [],
     exclude_folders: [],
+    include_direct: [],
+    exclude_direct: [],
     seen_names: [],
     ignored: [],
   });
@@ -77,6 +89,8 @@ test("legacy sections gain disabled folder sync and serialize configured rules",
     mode: "new",
     include_folders: ["styles"],
     exclude_folders: ["styles/private"],
+    include_direct: [],
+    exclude_direct: [],
     seen_names: ["styles/old.safetensors"],
     ignored: [{
       name: "styles/ignored.safetensors",
@@ -86,6 +100,30 @@ test("legacy sections gain disabled folder sync and serialize configured rules",
   };
   const restored = normalizeState(serializeState(state));
   assert.deepEqual(restored.sections[0].folder_sync, state.sections[0].folder_sync);
+});
+
+
+test("folder tree view preferences roundtrip but stay outside full presets", () => {
+  const state = normalizeState(sampleState());
+  state.folder_tree_view = {
+    expanded: ["characters/deep"],
+    collapsed: ["characters"],
+  };
+  state.sections[0].folder_tree_view = {
+    expanded: ["styles/deep"],
+    collapsed: ["styles"],
+  };
+
+  const restored = normalizeState(serializeState(state));
+  assert.deepEqual(restored.folder_tree_view, state.folder_tree_view);
+  assert.deepEqual(
+    restored.sections[0].folder_tree_view,
+    state.sections[0].folder_tree_view,
+  );
+
+  const snapshot = fullPresetStateFromState(state);
+  assert.equal("folder_tree_view" in snapshot, false);
+  assert.equal("folder_tree_view" in snapshot.sections[0], false);
 });
 
 
@@ -584,6 +622,10 @@ test("full preset snapshots preserve the complete normalized setup only", () => 
 
 test("full preset application replaces the setup and selects the preset", () => {
   const state = normalizeState(sampleState());
+  state.folder_tree_view = {
+    expanded: ["remember/deep"],
+    collapsed: ["remember"],
+  };
   state.sections[0].loras[0].error = "old transient error";
   const presetState = fullPresetStateFromState(normalizeState({
     version: 1,
@@ -639,6 +681,10 @@ test("full preset application replaces the setup and selects the preset", () => 
   });
 
   assert.equal(state.active_preset_id, "full-preset");
+  assert.deepEqual(state.folder_tree_view, {
+    expanded: ["remember/deep"],
+    collapsed: ["remember"],
+  });
   assert.deepEqual(state.folder_filters, ["characters"]);
   assert.deepEqual(state.settings, presetState.settings);
   assert.deepEqual(state.sections.map((section) => section.id), ["saved-two", "saved-one"]);

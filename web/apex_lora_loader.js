@@ -44,6 +44,18 @@ import {
 } from "./overlay_state.js";
 import { activeLoraSignature, createAutoQueueController } from "./auto_queue.js";
 import {
+  buildFolderTree,
+  createFolderRuleMatcher,
+  expandedFoldersFromView,
+  folderTreeSelectionStates,
+  normalizeFolderRules,
+  normalizeNodeFolderFilters,
+  setFolderDirectSelected,
+  setFolderSubtreeSelected,
+  setFolderTreeExpanded,
+  visibleFolderTreeRows,
+} from "./folder_tree.js";
+import {
   addIgnoredIdentity,
   deriveSectionSyncStatus,
   markSectionSyncSeen,
@@ -54,8 +66,6 @@ import {
   recordSectionSyncExplicitAdditions,
   removeIgnoredIdentity,
   resetSectionSyncBaseline,
-  sectionSyncFolderSelectionStates,
-  sectionSyncFolderTree,
   summarizeSectionSyncDetections,
 } from "./section_sync.js";
 
@@ -79,6 +89,7 @@ const SECTION_TOGGLE_ICON_SETS = {
 let catalogCache = null;
 let catalogRevision = 0;
 let catalogFolderIndex = new Map();
+let catalogDirectFolderIndex = new Map();
 let catalogLoadGeneration = 0;
 let catalogLoadPromise = null;
 let presetsCache = null;
@@ -325,10 +336,13 @@ async function fetchJson(path, options = undefined) {
 
 function buildCatalogFolderIndex(names) {
   const index = new Map();
+  const direct = new Map();
   for (const name of Array.isArray(names) ? names : []) {
     const normalized = String(name).replaceAll("\\", "/");
     const separator = normalized.lastIndexOf("/");
     const folder = separator === -1 ? "" : normalized.slice(0, separator);
+    if (!direct.has(folder)) direct.set(folder, []);
+    direct.get(folder).push(normalized);
     const ancestors = [""];
     if (folder) {
       const parts = folder.split("/");
@@ -341,7 +355,7 @@ function buildCatalogFolderIndex(names) {
       index.get(ancestor).push(normalized);
     }
   }
-  return index;
+  return { recursive: index, direct };
 }
 
 
@@ -349,6 +363,9 @@ function catalogCandidatesForSectionSync(normalizedConfig) {
   const names = new Set();
   for (const folder of normalizedConfig?.include_folders || []) {
     for (const name of catalogFolderIndex.get(folder) || []) names.add(name);
+  }
+  for (const folder of normalizedConfig?.include_direct || []) {
+    for (const name of catalogDirectFolderIndex.get(folder) || []) names.add(name);
   }
   return [...names];
 }
@@ -363,7 +380,9 @@ async function loadCatalog(force = false) {
     .then((catalog) => {
       if (generation === catalogLoadGeneration) {
         catalogCache = catalog;
-        catalogFolderIndex = buildCatalogFolderIndex(catalog.loras);
+        const indexes = buildCatalogFolderIndex(catalog.loras);
+        catalogFolderIndex = indexes.recursive;
+        catalogDirectFolderIndex = indexes.direct;
         catalogRevision += 1;
       }
       return catalog;
@@ -979,6 +998,8 @@ function recordSectionSyncRemoval(section, row) {
     config.enabled
     || config.include_folders.length > 0
     || config.exclude_folders.length > 0
+    || config.include_direct.length > 0
+    || config.exclude_direct.length > 0
     || config.seen_names.length > 0
     || config.ignored.length > 0
   );
@@ -1268,13 +1289,106 @@ async function showLoraChooser(node, anchor, sectionId, rowId = null) {
 }
 
 
+function compactFolderRules(value) {
+  const rules = normalizeFolderRules(value);
+  const hasRules = [
+    "include_folders",
+    "exclude_folders",
+    "include_direct",
+    "exclude_direct",
+  ].some((key) => rules[key].length);
+  if (rules.default_selected && !hasRules) return null;
+  return rules;
+}
+
+
+function renderCompactFolderTree(
+  list,
+  tree,
+  expanded,
+  rules,
+  {
+    disabled = false,
+    configuredFolders = new Set(),
+    onToggleSubtree,
+    onToggleDirect,
+    onToggleExpanded,
+  },
+) {
+  const previousScrollTop = list.scrollTop;
+  const matcher = createFolderRuleMatcher(rules);
+  const selectionStates = folderTreeSelectionStates(tree, rules);
+  list.replaceChildren();
+  for (const entry of visibleFolderTreeRows(tree, expanded)) {
+    const { node: folderNode, depth, type } = entry;
+    const direct = type === "direct";
+    const row = document.createElement("div");
+    row.className = `apex-folder-tree-row${direct ? " direct" : ""}`;
+    row.style.setProperty("--apex-folder-depth", String(depth));
+    const available = direct
+      ? folderNode.directCount > 0
+      : folderNode.totalCount > 0 || configuredFolders.has(folderNode.path);
+    if (!available) row.classList.add("filtered");
+
+    const caret = document.createElement("button");
+    caret.type = "button";
+    caret.className = "apex-folder-tree-caret";
+    const canExpand = !direct && folderNode.children.length > 0;
+    caret.textContent = canExpand ? (expanded.has(folderNode.path) ? "▾" : "▸") : "";
+    caret.disabled = !canExpand;
+    caret.tabIndex = canExpand ? 0 : -1;
+    caret.title = canExpand
+      ? `${expanded.has(folderNode.path) ? "Collapse" : "Expand"} ${folderNode.name}`
+      : "";
+    if (canExpand) {
+      caret.addEventListener("click", () => {
+        onToggleExpanded(folderNode.path);
+      });
+    }
+
+    const label = document.createElement("label");
+    label.className = "apex-folder-tree-choice";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    if (direct) {
+      checkbox.checked = matcher.direct(folderNode.path);
+    } else {
+      const state = selectionStates.get(folderNode.path);
+      checkbox.checked = state.checked;
+      checkbox.indeterminate = state.mixed;
+    }
+    checkbox.disabled = disabled || (!available && !configuredFolders.has(folderNode.path));
+    checkbox.addEventListener("change", () => {
+      if (direct) onToggleDirect(folderNode.path, checkbox.checked);
+      else onToggleSubtree(folderNode.path, checkbox.checked);
+    });
+
+    const name = document.createElement("span");
+    name.className = "apex-folder-tree-name";
+    name.textContent = direct ? "(files here)" : folderNode.name;
+    name.title = direct
+      ? `LoRAs directly inside ${folderNode.path || "the root LoRA folder"}`
+      : folderNode.path || "The complete LoRA folder";
+    const count = document.createElement("span");
+    count.className = "apex-folder-tree-count";
+    count.textContent = `(${direct ? folderNode.directCount : folderNode.totalCount})`;
+    label.append(checkbox, name, count);
+    row.append(caret, label);
+    list.appendChild(row);
+  }
+  list.scrollTop = previousScrollTop;
+}
+
+
 async function showFolderChooser(node, anchor) {
   try {
     const catalog = await loadCatalog();
     if (!editorAnchorIsActive(node, anchor)) return;
     let draft = node.__apexState.folder_filters === null
-      ? null
-      : [...node.__apexState.folder_filters];
+      ? normalizeFolderRules({ default_selected: true })
+      : normalizeNodeFolderFilters(node.__apexState.folder_filters);
+    const tree = buildFolderTree(catalog.loras, catalog.folders);
+    const expanded = expandedFoldersFromView(tree, node.__apexState.folder_tree_view);
     const { panel, close } = createPopover(anchor, "LoRA folders");
     const actions = document.createElement("div");
     actions.className = "apex-popover-actions";
@@ -1287,51 +1401,43 @@ async function showFolderChooser(node, anchor) {
     apply.className = "apex-primary-action";
     actions.append(all, none, apply);
     const list = document.createElement("div");
-    list.className = "apex-list";
+    list.className = "apex-list apex-folder-tree";
     panel.append(actions, list);
 
     const renderFolders = () => {
-      list.replaceChildren();
-      for (const folder of catalog.folders) {
-        const label = document.createElement("label");
-        label.className = "apex-folder-row";
-        label.style.paddingLeft = `${7 + (folder ? folder.split("/").length - 1 : 0) * 14}px`;
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        const inherited = draft !== null && folder !== "" && draft.some(
-          (selected) => selected !== "" && selected !== folder && folder.startsWith(`${selected}/`),
-        );
-        checkbox.checked = draft === null || draft.includes(folder) || inherited;
-        checkbox.disabled = inherited;
-        if (inherited) checkbox.title = "Included by a selected parent folder";
-        checkbox.indeterminate = draft !== null && folder !== "" &&
-          draft.some((selected) => selected.startsWith(`${folder}/`));
-        const name = document.createElement("span");
-        name.textContent = folder || "(root)";
-        name.title = folder || "LoRAs directly in the root LoRA folder";
-        checkbox.addEventListener("change", () => {
-          if (draft === null) draft = [folder];
-          else if (checkbox.checked) draft.push(folder);
-          else draft = draft.filter((item) => item !== folder);
-          draft = [...new Set(draft)];
+      renderCompactFolderTree(list, tree, expanded, draft, {
+        onToggleSubtree: (folder, selected) => {
+          draft = setFolderSubtreeSelected(draft, folder, selected);
           renderFolders();
-        });
-        label.append(checkbox, name);
-        list.appendChild(label);
-      }
+        },
+        onToggleDirect: (folder, selected) => {
+          draft = setFolderDirectSelected(draft, folder, selected);
+          renderFolders();
+        },
+        onToggleExpanded: (folder) => {
+          const nextExpanded = !expanded.has(folder);
+          if (nextExpanded) expanded.add(folder);
+          else expanded.delete(folder);
+          node.__apexState.folder_tree_view = setFolderTreeExpanded(
+            node.__apexState.folder_tree_view,
+            folder,
+            nextExpanded,
+          );
+          commit(node, { render: false });
+          renderFolders();
+        },
+      });
     };
-    all.addEventListener("click", () => { draft = null; renderFolders(); });
-    none.addEventListener("click", () => { draft = []; renderFolders(); });
+    all.addEventListener("click", () => {
+      draft = normalizeFolderRules({ default_selected: true });
+      renderFolders();
+    });
+    none.addEventListener("click", () => {
+      draft = normalizeFolderRules({ default_selected: false });
+      renderFolders();
+    });
     apply.addEventListener("click", () => {
-      if (draft !== null) {
-        draft.sort((a, b) => a.split("/").length - b.split("/").length || a.localeCompare(b));
-        draft = draft.filter((folder, index) => !draft.some(
-          (parent, parentIndex) => parentIndex < index && parent !== "" && folder.startsWith(`${parent}/`),
-        ));
-      }
-      node.__apexState.folder_filters = draft === null
-        ? null
-        : [...new Set(draft)].sort((a, b) => a.localeCompare(b));
+      node.__apexState.folder_filters = compactFolderRules(draft);
       commit(node, { fullPresetDirty: true, folderSyncDirty: true });
       close();
     });
@@ -1352,34 +1458,16 @@ function folderIsWithin(folder, parent) {
 }
 
 
-function folderAllowedByNodeFilters(folder, filters) {
-  if (filters === null) return true;
-  if (!Array.isArray(filters) || !filters.length) return false;
-  return filters.some((filter) => {
-    if (filter === "") return folder === "";
-    return folder === filter || folder.startsWith(`${filter}/`);
-  });
-}
-
-
-function folderVisibleUnderNodeFilters(folder, filters) {
-  if (folderAllowedByNodeFilters(folder, filters)) return true;
-  if (filters === null || !Array.isArray(filters)) return filters === null;
-  return filters.some((filter) => (
-    filter !== ""
-    && (folder === "" || filter.startsWith(`${folder}/`))
-  ));
-}
-
-
 function setFolderSyncSubtree(config, folder, selected) {
   const next = normalizeSectionSync(config);
-  next.include_folders = next.include_folders.filter(
-    (value) => !folderIsWithin(value, folder),
-  );
-  next.exclude_folders = next.exclude_folders.filter(
-    (value) => !folderIsWithin(value, folder),
-  );
+  for (const key of [
+    "include_folders",
+    "exclude_folders",
+    "include_direct",
+    "exclude_direct",
+  ]) {
+    next[key] = next[key].filter((value) => !folderIsWithin(value, folder));
+  }
   (selected ? next.include_folders : next.exclude_folders).push(folder);
   return normalizeSectionSync(next);
 }
@@ -1877,6 +1965,7 @@ async function showSectionFolderSync(node, anchor, sectionId) {
     let draft = normalizeSectionSync(sectionById(node, sectionId).folder_sync);
     let busy = false;
     let folderScrollTop = 0;
+    let folderExpanded = null;
     node.__apexFolderSyncOperationToken =
       (node.__apexFolderSyncOperationToken || 0) + 1;
 
@@ -1933,15 +2022,23 @@ async function showSectionFolderSync(node, anchor, sectionId) {
           : "Folder mirror"
         : "Folder sync off";
       const summaryDetail = document.createElement("span");
+      const linkedRuleCount = live.include_folders.length + live.include_direct.length;
+      const excludedRuleCount = live.exclude_folders.length + live.exclude_direct.length;
       summaryDetail.textContent = live.enabled
-        ? `${live.include_folders.length} linked · ${live.exclude_folders.length} excluded · ${status.actionable.length} pending${live.auto_sync ? " · auto" : ""}`
-        : `${live.include_folders.length} linked folder${live.include_folders.length === 1 ? "" : "s"} retained while paused`;
+        ? `${linkedRuleCount} linked · ${excludedRuleCount} excluded · ${status.actionable.length} pending${live.auto_sync ? " · auto" : ""}`
+        : `${linkedRuleCount} linked rule${linkedRuleCount === 1 ? "" : "s"} retained while paused`;
       summaryDetail.title = [
         live.include_folders.length
           ? `Linked: ${live.include_folders.map((folder) => folder || "(LoRA root)").join(", ")}`
           : "No linked folders",
+        live.include_direct.length
+          ? `Direct only: ${live.include_direct.map((folder) => folder || "(LoRA root)").join(", ")}`
+          : "",
         live.exclude_folders.length
           ? `Excluded: ${live.exclude_folders.map((folder) => folder || "(LoRA root)").join(", ")}`
+          : "",
+        live.exclude_direct.length
+          ? `Direct files excluded: ${live.exclude_direct.map((folder) => folder || "(LoRA root)").join(", ")}`
           : "",
       ].filter(Boolean).join("\n");
       summaryText.append(summaryTitle, summaryDetail);
@@ -1988,75 +2085,69 @@ async function showSectionFolderSync(node, anchor, sectionId) {
       folderLabel.className = "apex-folder-sync-label";
       folderLabel.textContent = "Linked folders";
       const folderHint = document.createElement("small");
-      folderHint.textContent = "Parents include future subfolders; child choices override them";
+      folderHint.textContent = "Parents include future subfolders; (files here) controls direct LoRAs";
       folderHeading.append(folderLabel, folderHint);
       const folderList = document.createElement("div");
       folderList.className = "apex-folder-sync-folders";
       const configuredFolders = new Set([
         ...draft.include_folders,
         ...draft.exclude_folders,
+        ...draft.include_direct,
+        ...draft.exclude_direct,
       ]);
-      const folderTree = sectionSyncFolderTree([...new Set([
-        ...(activeCatalog.folders || []).filter((folder) => (
-          folderVisibleUnderNodeFilters(folder, node.__apexState.folder_filters)
-        )),
-        ...configuredFolders,
-      ])]);
-      const visibleFolders = folderTree.map(({ folder }) => folder);
-      const folderDepths = new Map(
-        folderTree.map(({ folder, depth }) => [folder, depth]),
+      const eligibleCatalogNames = (activeCatalog.loras || []).filter((name) =>
+        matchesFolderFilters(name, node.__apexState.folder_filters)
       );
-      const selectionStates = sectionSyncFolderSelectionStates(visibleFolders, draft);
-      const visibleFolderSet = new Set(visibleFolders);
-      const mixedFolders = new Set();
-      for (const folder of visibleFolders) {
-        const selected = selectionStates.get(folder) === true;
-        let ancestor = folder;
-        while (ancestor) {
-          const separator = ancestor.lastIndexOf("/");
-          ancestor = separator === -1 ? "" : ancestor.slice(0, separator);
-          if (
-            visibleFolderSet.has(ancestor)
-            && (selectionStates.get(ancestor) === true) !== selected
-          ) {
-            mixedFolders.add(ancestor);
-          }
-        }
+      const tree = buildFolderTree(eligibleCatalogNames, [...configuredFolders]);
+      if (folderExpanded === null) {
+        folderExpanded = expandedFoldersFromView(tree, section.folder_tree_view);
       }
-      for (const folder of visibleFolders) {
-        const allowed = folderAllowedByNodeFilters(
-          folder,
-          node.__apexState.folder_filters,
-        );
-        const selected = selectionStates.get(folder) === true;
-        const mixed = mixedFolders.has(folder);
-        const row = document.createElement("label");
-        row.className = `apex-folder-sync-folder${allowed ? "" : " filtered"}`;
-        row.style.paddingLeft = `${7 + (folderDepths.get(folder) || 0) * 15}px`;
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        checkbox.checked = selected;
-        checkbox.indeterminate = mixed;
-        checkbox.disabled = busy || (!allowed && !configuredFolders.has(folder));
-        const name = document.createElement("span");
-        name.textContent = folder || "(LoRA root)";
-        name.title = allowed
-          ? folder || "The complete LoRA folder"
-          : configuredFolders.has(folder)
-            ? "Stored rule; currently outside the node-wide folder filters"
-            : "Unavailable under the node-wide folder filters";
-        checkbox.addEventListener("change", () => {
-          draft = setFolderSyncSubtree(draft, folder, checkbox.checked);
+      const syncRules = normalizeFolderRules({
+        default_selected: false,
+        include_folders: draft.include_folders,
+        exclude_folders: draft.exclude_folders,
+        include_direct: draft.include_direct,
+        exclude_direct: draft.exclude_direct,
+      });
+      renderCompactFolderTree(folderList, tree, folderExpanded, syncRules, {
+        disabled: busy,
+        configuredFolders,
+        onToggleSubtree: (folder, selected) => {
+          draft = setFolderSyncSubtree(draft, folder, selected);
           renderPanel();
-        });
-        row.append(checkbox, name);
-        folderList.appendChild(row);
-      }
-      if (!visibleFolders.length) {
+        },
+        onToggleDirect: (folder, selected) => {
+          const nextRules = setFolderDirectSelected(syncRules, folder, selected);
+          draft = normalizeSectionSync({
+            ...draft,
+            include_folders: nextRules.include_folders,
+            exclude_folders: nextRules.exclude_folders,
+            include_direct: nextRules.include_direct,
+            exclude_direct: nextRules.exclude_direct,
+          });
+          renderPanel();
+        },
+        onToggleExpanded: (folder) => {
+          const nextExpanded = !folderExpanded.has(folder);
+          if (nextExpanded) folderExpanded.add(folder);
+          else folderExpanded.delete(folder);
+          const current = sectionById(node, sectionId);
+          if (current) {
+            current.folder_tree_view = setFolderTreeExpanded(
+              current.folder_tree_view,
+              folder,
+              nextExpanded,
+            );
+            commit(node, { render: false });
+          }
+          renderPanel();
+        },
+      });
+      if (!tree.totalCount && configuredFolders.size === 0) {
         const empty = document.createElement("div");
         empty.className = "apex-empty";
         empty.textContent = "No folders are available under the node-wide folder filters.";
-        folderList.appendChild(empty);
+        folderList.replaceChildren(empty);
       }
       body.append(folderHeading, folderList);
       folderList.scrollTop = folderScrollTop;
@@ -2064,9 +2155,16 @@ async function showSectionFolderSync(node, anchor, sectionId) {
       const unavailable = [...new Set([
         ...draft.include_folders,
         ...draft.exclude_folders,
+        ...draft.include_direct,
+        ...draft.exclude_direct,
       ])].filter((folder) => (
         !(activeCatalog.folders || []).includes(folder)
-        || !folderVisibleUnderNodeFilters(folder, node.__apexState.folder_filters)
+        || !(activeCatalog.loras || []).some((name) => {
+          if (!matchesFolderFilters(name, node.__apexState.folder_filters)) return false;
+          const separator = name.lastIndexOf("/");
+          const candidateFolder = separator === -1 ? "" : name.slice(0, separator);
+          return folderIsWithin(candidateFolder, folder);
+        })
       ));
       if (unavailable.length) {
         const warning = document.createElement("div");
@@ -2095,6 +2193,8 @@ async function showSectionFolderSync(node, anchor, sectionId) {
         || live.auto_sync
         || live.include_folders.length
         || live.exclude_folders.length
+        || live.include_direct.length
+        || live.exclude_direct.length
         || live.seen_names.length
         || live.ignored.length
       );
@@ -2115,10 +2215,11 @@ async function showSectionFolderSync(node, anchor, sectionId) {
       apply.type = "button";
       apply.className = "apex-primary-action";
       apply.textContent = "Apply changes";
+      const hasIncludes = draft.include_folders.length > 0 || draft.include_direct.length > 0;
       apply.disabled = busy || !dirty || (
-        draft.enabled && draft.include_folders.length === 0
+        draft.enabled && !hasIncludes
       );
-      apply.title = draft.enabled && draft.include_folders.length === 0
+      apply.title = draft.enabled && !hasIncludes
         ? "Select at least one folder before enabling synchronization"
         : "Save this section’s folder-sync configuration";
       apply.addEventListener("click", () => {
@@ -2129,6 +2230,8 @@ async function showSectionFolderSync(node, anchor, sectionId) {
         const rulesChanged = (
           JSON.stringify(previous.include_folders) !== JSON.stringify(next.include_folders)
           || JSON.stringify(previous.exclude_folders) !== JSON.stringify(next.exclude_folders)
+          || JSON.stringify(previous.include_direct) !== JSON.stringify(next.include_direct)
+          || JSON.stringify(previous.exclude_direct) !== JSON.stringify(next.exclude_direct)
           || (next.mode === "new" && previous.mode !== "new")
         );
         if (next.mode === "new" && rulesChanged) {
@@ -3377,7 +3480,11 @@ function buildToolbar(node) {
   );
   save.addEventListener("click", () => showSavePreset(node, save));
   const filters = node.__apexState.folder_filters;
-  const folderLabel = filters === null ? "Folders: All" : filters.length ? `Folders: ${filters.length}` : "Folders: None";
+  const folderLabel = filters === null
+    ? "Folders: All"
+    : Array.isArray(filters)
+      ? filters.length ? `Folders: ${filters.length}` : "Folders: None"
+      : "Folders: Custom";
   const folders = iconButton(
     "folderCog",
     "Choose which LoRA folders are offered by the picker",

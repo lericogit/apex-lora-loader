@@ -1225,6 +1225,74 @@
 }
 .apex-folder-row:last-child { border-bottom: 0; }
 .apex-folder-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apex-folder-tree {
+  max-height: min(380px, 58vh);
+  padding-block: 3px;
+}
+.apex-folder-tree-row {
+  box-sizing: border-box;
+  display: flex;
+  min-width: 0;
+  min-height: 22px;
+  padding: 1px 6px 1px calc(4px + var(--apex-folder-depth, 0) * 14px);
+  gap: 2px;
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, .025);
+  color: var(--apex-text-soft);
+}
+.apex-folder-tree-row:last-child { border-bottom: 0; }
+.apex-folder-tree-row:hover { background: rgba(68, 166, 173, .055); }
+.apex-folder-tree-row.direct {
+  color: var(--apex-text-dim);
+  font-style: italic;
+}
+.apex-folder-tree-row.filtered {
+  color: var(--apex-text-dim);
+  opacity: .5;
+}
+.apex-folder-tree-caret {
+  display: grid !important;
+  width: 13px !important;
+  min-width: 13px !important;
+  min-height: 18px !important;
+  padding: 0 !important;
+  place-items: center;
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--apex-text-dim) !important;
+  font: 10px/1 var(--apex-body-font) !important;
+}
+.apex-folder-tree-caret:not(:disabled):hover {
+  color: var(--apex-primary) !important;
+}
+.apex-folder-tree-caret:disabled { opacity: 0 !important; }
+.apex-folder-tree-choice {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  gap: 6px;
+  align-items: center;
+  cursor: pointer;
+}
+.apex-folder-tree-choice input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  min-height: 13px;
+  flex: none;
+}
+.apex-folder-tree-name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.apex-folder-tree-count {
+  flex: none;
+  color: var(--apex-text-dim);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
 .apex-empty { padding: 12px 8px; color: var(--apex-text-dim); text-align: center; }
 
 .apex-popover.apex-folder-sync-popover {
@@ -1369,7 +1437,14 @@
   scrollbar-color: var(--apex-surface-bright) transparent;
   scrollbar-width: thin;
 }
-.apex-folder-sync-folders { max-height: 160px; }
+.apex-folder-sync-folders {
+  max-height: 180px;
+  padding-block: 3px;
+}
+.apex-folder-sync-folders .apex-folder-tree-row {
+  min-height: 21px;
+  font-size: 10px;
+}
 .apex-folder-sync-folder {
   box-sizing: border-box;
   display: flex;

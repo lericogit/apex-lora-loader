@@ -37,6 +37,8 @@ function sync(overrides = {}) {
     mode: "mirror",
     include_folders: ["styles"],
     exclude_folders: [],
+    include_direct: [],
+    exclude_direct: [],
     seen_names: [],
     ignored: [],
     ...overrides,
@@ -66,6 +68,8 @@ test("normalization canonicalizes slash paths and deduplicates deterministically
     mode: "mirror",
     include_folders: ["", "styles/anime"],
     exclude_folders: ["styles/anime/old"],
+    include_direct: [],
+    exclude_direct: [],
     seen_names: ["A.safetensors", "z.safetensors"],
     ignored: [{ name: "styles/b.safetensors", sha256: hash("b"), size: 4 }],
   });
@@ -178,6 +182,21 @@ test("root inclusion is recursive while the existing root filter remains root-on
   assert.equal(matchesSectionSyncFolders("blocked/no.safetensors", config), false);
   assert.equal(matchesNodeFolderFilters("root.safetensors", [""]), true);
   assert.equal(matchesNodeFolderFilters("nested/no.safetensors", [""]), false);
+});
+
+
+test("direct folder overrides keep child synchronization recursive", () => {
+  const config = sync({
+    include_folders: ["styles"],
+    exclude_direct: ["styles"],
+  });
+
+  assert.equal(matchesSectionSyncFolders("styles/direct.safetensors", config), false);
+  assert.equal(matchesSectionSyncFolders("styles/future/child.safetensors", config), true);
+  assert.deepEqual(eligibleSectionSyncNames([
+    "styles/direct.safetensors",
+    "styles/future/child.safetensors",
+  ], config), ["styles/future/child.safetensors"]);
 });
 
 
@@ -432,6 +451,8 @@ test("batched explicit additions update ignored entries and New-only seen state 
     mode: "new",
     include_folders: ["styles"],
     exclude_folders: [],
+    include_direct: [],
+    exclude_direct: [],
     seen_names: [],
     ignored: [],
   });

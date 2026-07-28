@@ -7,7 +7,7 @@
 Organize, filter, reorder, preset, recover, and annotate large LoRA stacks in one compact node.
 
 [![License: MIT][license-shield]][license-link]
-[![Version: v0.5.0][version-shield]][version-link]
+[![Version: v0.5.1][version-shield]][version-link]
 [![ComfyUI Custom Node][comfyui-shield]][comfyui-link]
 [![Local only][local-shield]][local-link]
 [![No extra packages][dependencies-shield]][dependencies-link]
@@ -89,14 +89,21 @@ Folder filters are stored per node and affect only the chooser:
 
 - **All** shows every LoRA known to ComfyUI.
 - **None** shows no chooser entries.
-- **Root** shows files directly inside the LoRA root.
-- Any number of nested folders can be selected recursively.
+- **(root)** controls the complete folder tree; its nested **(files here)**
+  choice controls only LoRAs directly inside the LoRA root.
+- Any number of nested folders can be selected recursively through a compact,
+  collapsible tree with per-folder LoRA counts and tri-state parent controls.
+- Folders that contain both LoRAs and child folders expose a separate
+  **(files here)** choice, so direct files can be included or excluded without
+  changing the recursive rule inherited by future subfolders.
+- Expanded and collapsed branches are remembered per node and per section when
+  the workflow is saved, without making those UI preferences part of presets.
 
 Existing rows keep loading even if their folders are later excluded from the chooser. **Add all LoRAs** adds every currently offered LoRA that is not already in the destination section after confirming the exact count and section name.
 
 ### Per-section folder sync
 
-Each section can optionally link to one or more recursive LoRA folders from the Folder Sync control beside **Add all LoRAs**. Linked folders are intersected with the node-wide picker filters, while temporarily unavailable rules remain stored for later reuse.
+Each section can optionally link to one or more recursive LoRA folders from the Folder Sync control beside **Add all LoRAs**. Its compact collapsible tree supports recursive folder rules, direct-file overrides, counts, and partial selections. Linked folders are intersected with the node-wide picker filters, while temporarily unavailable rules remain stored for later reuse.
 
 - **Folder mirror** offers every eligible catalog file missing from that section.
 - **New LoRAs only** captures the current eligible files as a baseline and offers only files discovered afterward.
@@ -293,7 +300,7 @@ Apex's original implementation was created for this project. No source from the 
 | --- | --- | --- |
 | [ComfyUI](https://github.com/Comfy-Org/ComfyUI) | Runtime foundation and canonical LoRA loading/application APIs. | Ordered multi-row orchestration, responsive sections, filtering, presets, identity recovery, and prompt metadata. |
 | [rgthree-comfy Power LoRA Loader](https://github.com/rgthree/rgthree-comfy) | UX reference for compact rows, per-row controls, reordering, and horizontal strength dragging. | Named manual section columns, recursive folder filters, global presets, rename recovery, trigger arrays, and prompt routing. |
-| [Fantastic LoRAs](https://github.com/Adudeguyman/comfyui_fantastic-loras) | Design reference for serialized custom rows, searchable selection, and per-node filtering. | Manual responsive columns, hash-based identity, smart presets, confirmed bulk addition, and local trigger metadata. |
+| [Fantastic LoRAs](https://github.com/Adudeguyman/comfyui_fantastic-loras) | Design reference for serialized custom rows, searchable selection, per-node filtering, and the compact collapsible folder-tree interaction. | Manual responsive columns, recursive future-folder rules with direct-file overrides, hash-based identity, smart presets, confirmed bulk addition, and local trigger metadata. |
 | [ComfyUI-Lora-Auto-Trigger-Words](https://github.com/idrirap/ComfyUI-Lora-Auto-Trigger-Words) | Concept reference for associating LoRAs, hashes, and trigger words. | Fully local manual metadata, multiple active choices, editable chips, and per-row placement without remote lookup. |
 | [ComfyUI-KJNodes](https://github.com/kijai/ComfyUI-KJNodes) | Technical reference while reviewing LoRA application patterns. | Apex remains model-agnostic and delegates the actual patch operation to ComfyUI core. |
 | [ComfyUI-INT8-Fast](https://github.com/BobJohnson24/ComfyUI-INT8-Fast) | Compatibility reference for LoRAs used with INT8 ConvRot models. | No INT8-Fast code or quantization math is included; Apex respects the incoming model patcher. |
@@ -308,7 +315,7 @@ Embedded Lucide icons retain their ISC terms, and Feather-derived Lucide icons r
 
 [license-shield]: https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square
 [license-link]: LICENSE
-[version-shield]: https://img.shields.io/badge/version-v0.5.0-1f6feb?style=flat-square
+[version-shield]: https://img.shields.io/badge/version-v0.5.1-1f6feb?style=flat-square
 [version-link]: https://github.com/lericogit/apex-lora-loader/releases
 [comfyui-shield]: https://img.shields.io/badge/ComfyUI-custom_node-6f42c1?style=flat-square
 [comfyui-link]: https://github.com/Comfy-Org/ComfyUI

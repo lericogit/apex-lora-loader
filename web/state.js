@@ -1,4 +1,9 @@
 import { normalizeSectionSync } from "./section_sync.js";
+import {
+  matchesFolderRules,
+  normalizeFolderTreeView,
+  normalizeNodeFolderFilters,
+} from "./folder_tree.js";
 
 
 export const STATE_VERSION = 1;
@@ -174,6 +179,7 @@ export function createSection(name = "LoRAs", column = 0) {
     name,
     collapsed: false,
     column: Number.isInteger(column) && column >= 0 ? column : 0,
+    folder_tree_view: normalizeFolderTreeView(),
     folder_sync: normalizeSectionSync(),
     loras: [],
   };
@@ -183,6 +189,7 @@ export function createState() {
   return {
     version: STATE_VERSION,
     folder_filters: null,
+    folder_tree_view: normalizeFolderTreeView(),
     active_preset_id: null,
     settings: normalizeSettings(),
     sections: [createSection()],
@@ -222,7 +229,8 @@ export function normalizeState(value) {
       ? null
       : Array.isArray(data.folder_filters)
         ? [...new Set(data.folder_filters.filter((item) => typeof item === "string"))]
-        : null,
+        : normalizeNodeFolderFilters(data.folder_filters),
+    folder_tree_view: normalizeFolderTreeView(data.folder_tree_view),
     active_preset_id: typeof data.active_preset_id === "string" ? data.active_preset_id : null,
     settings: normalizeSettings(data.settings),
     sections: data.sections.map((section, sectionIndex) => ({
@@ -232,6 +240,7 @@ export function normalizeState(value) {
         : `Section ${sectionIndex + 1}`,
       collapsed: section?.collapsed === true,
       column: Number.isInteger(section?.column) && section.column >= 0 ? section.column : null,
+      folder_tree_view: normalizeFolderTreeView(section?.folder_tree_view),
       folder_sync: normalizeSectionSync(section?.folder_sync),
       loras: Array.isArray(section?.loras)
         ? section.loras.filter((row) => row && typeof row.name === "string").map((row) => ({
@@ -257,6 +266,7 @@ export function serializeState(state) {
   return JSON.stringify({
     version: STATE_VERSION,
     folder_filters: state.folder_filters,
+    folder_tree_view: normalizeFolderTreeView(state.folder_tree_view),
     active_preset_id: state.active_preset_id,
     settings: normalizeSettings(state.settings),
     sections: state.sections.map((section) => ({
@@ -264,6 +274,7 @@ export function serializeState(state) {
       name: section.name,
       collapsed: section.collapsed,
       column: Number.isInteger(section.column) && section.column >= 0 ? section.column : null,
+      folder_tree_view: normalizeFolderTreeView(section.folder_tree_view),
       folder_sync: normalizeSectionSync(section.folder_sync),
       loras: section.loras.map(({ error, ...row }) => row),
     })),
@@ -288,12 +299,8 @@ export function folderOf(name) {
 
 export function matchesFolderFilters(name, filters) {
   if (filters === null) return true;
-  if (!Array.isArray(filters) || !filters.length) return false;
-  const folder = folderOf(name);
-  return filters.some((prefix) => {
-    if (prefix === "") return folder === "";
-    return folder === prefix || folder.startsWith(`${prefix}/`);
-  });
+  const rules = normalizeNodeFolderFilters(filters);
+  return rules ? matchesFolderRules(name, rules) : false;
 }
 
 export function strengthFromDrag(startValue, deltaX, step = DEFAULT_SETTINGS.strength_drag_step) {
@@ -460,6 +467,8 @@ export function presetType(preset) {
 export function fullPresetStateFromState(state) {
   const snapshot = JSON.parse(serializeState(normalizeState(state)));
   delete snapshot.active_preset_id;
+  delete snapshot.folder_tree_view;
+  for (const section of snapshot.sections) delete section.folder_tree_view;
   return snapshot;
 }
 
@@ -467,12 +476,14 @@ export function applyFullPreset(state, preset) {
   if (presetType(preset) !== "full" || preset?.state?.version !== STATE_VERSION || !Array.isArray(preset.state.sections)) {
     throw new Error("Full preset state has an unsupported format.");
   }
+  const folderTreeView = normalizeFolderTreeView(state.folder_tree_view);
   const replacement = normalizeState({
     ...preset.state,
     active_preset_id: preset.id,
   });
   state.version = replacement.version;
   state.folder_filters = replacement.folder_filters;
+  state.folder_tree_view = folderTreeView;
   state.settings = replacement.settings;
   state.sections = replacement.sections;
   state.active_preset_id = preset.id;

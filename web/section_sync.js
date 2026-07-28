@@ -1,9 +1,20 @@
+import {
+  createFolderRuleMatcher,
+  folderDirectSelected,
+  matchesFolderRules,
+  normalizeFolderRules,
+  normalizeNodeFolderFilters,
+} from "./folder_tree.js";
+
+
 export const DEFAULT_SECTION_SYNC = Object.freeze({
   enabled: false,
   auto_sync: false,
   mode: "mirror",
   include_folders: Object.freeze([]),
   exclude_folders: Object.freeze([]),
+  include_direct: Object.freeze([]),
+  exclude_direct: Object.freeze([]),
   seen_names: Object.freeze([]),
   ignored: Object.freeze([]),
 });
@@ -118,6 +129,8 @@ export function normalizeSectionSync(value) {
   const source = value && typeof value === "object" ? value : {};
   const includeFolders = canonicalList(source.include_folders, true);
   const included = new Set(includeFolders);
+  const includeDirect = canonicalList(source.include_direct, true);
+  const directIncluded = new Set(includeDirect);
   return {
     enabled: source.enabled === true,
     auto_sync: source.auto_sync === true,
@@ -125,52 +138,47 @@ export function normalizeSectionSync(value) {
     include_folders: includeFolders,
     exclude_folders: canonicalList(source.exclude_folders, true)
       .filter((folder) => !included.has(folder)),
+    include_direct: includeDirect,
+    exclude_direct: canonicalList(source.exclude_direct, true)
+      .filter((folder) => !directIncluded.has(folder)),
     seen_names: canonicalList(source.seen_names, false),
     ignored: normalizeIgnored(source.ignored),
   };
 }
 
 
+function rulesFromSectionSync(normalized) {
+  return normalizeFolderRules({
+    default_selected: false,
+    include_folders: normalized.include_folders,
+    exclude_folders: normalized.exclude_folders,
+    include_direct: normalized.include_direct,
+    exclude_direct: normalized.exclude_direct,
+  });
+}
+
+
 function folderRuleMatcher(normalized) {
-  const included = new Set(normalized.include_folders);
-  const excluded = new Set(normalized.exclude_folders);
-  return (folder) => {
-    let selected = included.has("");
-    if (!folder) return selected;
-    let path = "";
-    for (const part of folder.split("/")) {
-      path = path ? `${path}/${part}` : part;
-      if (included.has(path)) selected = true;
-      else if (excluded.has(path)) selected = false;
-    }
-    return selected;
-  };
+  const rules = rulesFromSectionSync(normalized);
+  const matcher = createFolderRuleMatcher(rules);
+  return matcher.subtree;
 }
 
 
 function normalizedNodeFilters(folderFilters) {
-  if (folderFilters === null || folderFilters === undefined) return null;
-  return new Set(canonicalList(folderFilters, true));
+  return normalizeNodeFolderFilters(folderFilters);
 }
 
 
 function nodeFilterMatcher(filters) {
   if (filters === null) return () => true;
-  if (!filters.size) return () => false;
-  return (folder) => {
-    if (!folder) return filters.has("");
-    let path = "";
-    for (const part of folder.split("/")) {
-      path = path ? `${path}/${part}` : part;
-      if (filters.has(path)) return true;
-    }
-    return false;
-  };
+  return createFolderRuleMatcher(filters).direct;
 }
 
 
 function eligibleNamesWithNormalizedConfig(catalogNames, normalized, folderFilters) {
-  const matchesRules = folderRuleMatcher(normalized);
+  const rules = rulesFromSectionSync(normalized);
+  const matchesRules = createFolderRuleMatcher(rules).direct;
   const matchesFilters = nodeFilterMatcher(normalizedNodeFilters(folderFilters));
   return namesFrom(catalogNames).filter((name) => {
     const folder = folderOf(name);
@@ -196,7 +204,7 @@ export function matchesSectionSyncFolders(name, config) {
   const canonicalName = canonicalPath(name, false);
   if (!canonicalName) return false;
   const normalized = normalizeSectionSync(config);
-  return folderRuleMatcher(normalized)(folderOf(canonicalName));
+  return folderDirectSelected(folderOf(canonicalName), rulesFromSectionSync(normalized));
 }
 
 
@@ -255,7 +263,8 @@ export function setSectionSyncFolderSelected(config, folder, selected) {
 export function matchesNodeFolderFilters(name, folderFilters = null) {
   const canonicalName = canonicalPath(name, false);
   if (!canonicalName) return false;
-  return nodeFilterMatcher(normalizedNodeFilters(folderFilters))(folderOf(canonicalName));
+  const filters = normalizedNodeFilters(folderFilters);
+  return filters === null || matchesFolderRules(canonicalName, filters);
 }
 
 
@@ -264,7 +273,7 @@ export function isSectionSyncCatalogMember(name, config, folderFilters = null) {
   if (!canonicalName) return false;
   const folder = folderOf(canonicalName);
   const normalized = normalizeSectionSync(config);
-  return folderRuleMatcher(normalized)(folder)
+  return folderDirectSelected(folder, rulesFromSectionSync(normalized))
     && nodeFilterMatcher(normalizedNodeFilters(folderFilters))(folder);
 }
 
@@ -431,7 +440,8 @@ export function recordSectionSyncExplicitAdditions(
   catalogNames = null,
 ) {
   const normalizedConfig = normalizeSectionSync(config);
-  const matchesRules = folderRuleMatcher(normalizedConfig);
+  const rules = rulesFromSectionSync(normalizedConfig);
+  const matchesRules = createFolderRuleMatcher(rules).direct;
   const additions = (Array.isArray(identities) ? identities : [])
     .map(normalizedIdentity)
     .filter(Boolean);

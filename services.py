@@ -467,16 +467,65 @@ class PresetStore:
 
         folder_filters = state.get("folder_filters")
         if folder_filters is not None:
-            if not isinstance(folder_filters, list) or len(folder_filters) > 256:
-                raise ValueError("Full preset folder filters must be null or an array of at most 256 folders.")
-            clean_filters = []
-            for folder in folder_filters:
-                if not isinstance(folder, str):
-                    raise ValueError("Full preset folder filters must be strings.")
-                folder = folder.replace("\\", "/")
-                if folder not in clean_filters:
-                    clean_filters.append(folder)
-            folder_filters = clean_filters
+            def clean_filter_folders(values, field):
+                if not isinstance(values, list) or len(values) > 256:
+                    raise ValueError(
+                        f"Full preset folder filter {field} must be an array of at most 256 folders."
+                    )
+                clean = []
+                for value in values:
+                    if not isinstance(value, str):
+                        raise ValueError("Full preset folder filters must be strings.")
+                    parts = []
+                    for raw_part in value.replace("\\", "/").split("/"):
+                        part = raw_part.strip()
+                        if not part or part == ".":
+                            continue
+                        if part == "..":
+                            raise ValueError("Full preset folder filters cannot contain '..'.")
+                        parts.append(part)
+                    folder = "/".join(parts)
+                    if folder not in clean:
+                        clean.append(folder)
+                return clean
+
+            if isinstance(folder_filters, list):
+                folder_filters = clean_filter_folders(folder_filters, "folders")
+            elif isinstance(folder_filters, dict):
+                default_selected = folder_filters.get("default_selected", False)
+                if not isinstance(default_selected, bool):
+                    raise ValueError("Full preset folder filter default_selected must be true or false.")
+                include_folders = clean_filter_folders(
+                    folder_filters.get("include_folders", []),
+                    "include_folders",
+                )
+                include_direct = clean_filter_folders(
+                    folder_filters.get("include_direct", []),
+                    "include_direct",
+                )
+                folder_filters = {
+                    "default_selected": default_selected,
+                    "include_folders": include_folders,
+                    "exclude_folders": [
+                        folder for folder in clean_filter_folders(
+                            folder_filters.get("exclude_folders", []),
+                            "exclude_folders",
+                        )
+                        if folder not in set(include_folders)
+                    ],
+                    "include_direct": include_direct,
+                    "exclude_direct": [
+                        folder for folder in clean_filter_folders(
+                            folder_filters.get("exclude_direct", []),
+                            "exclude_direct",
+                        )
+                        if folder not in set(include_direct)
+                    ],
+                }
+            else:
+                raise ValueError(
+                    "Full preset folder filters must be null, an array, or a folder-rule object."
+                )
 
         settings = state.get("settings", {})
         if not isinstance(settings, dict):
@@ -652,6 +701,22 @@ class PresetStore:
                 f"Folder sync include_folders and exclude_folders for section '{section_name}' "
                 "cannot contain the same folder."
             )
+        include_direct = clean_strings(
+            "include_direct",
+            FOLDER_SYNC_MAX_RULES,
+            normalize_folder,
+        )
+        exclude_direct = clean_strings(
+            "exclude_direct",
+            FOLDER_SYNC_MAX_RULES,
+            normalize_folder,
+        )
+        direct_overlap = set(include_direct).intersection(exclude_direct)
+        if direct_overlap:
+            raise ValueError(
+                f"Folder sync include_direct and exclude_direct for section '{section_name}' "
+                "cannot contain the same folder."
+            )
 
         ignored = folder_sync.get("ignored", [])
         if not isinstance(ignored, list) or len(ignored) > FOLDER_SYNC_MAX_ITEMS:
@@ -701,6 +766,8 @@ class PresetStore:
             "mode": mode,
             "include_folders": include_folders,
             "exclude_folders": exclude_folders,
+            "include_direct": include_direct,
+            "exclude_direct": exclude_direct,
             "seen_names": clean_strings(
                 "seen_names",
                 FOLDER_SYNC_MAX_ITEMS,
