@@ -88,6 +88,20 @@ def make_catalog_files(tmp_path, files):
 
 
 class BackendTests(unittest.TestCase):
+    def test_preview_lora_limit_normalizes_bounds_and_legacy_show_all(self):
+        self.assertEqual(services.normalize_preview_lora_limit(None), 20)
+        self.assertEqual(services.normalize_preview_lora_limit(4), 5)
+        self.assertEqual(services.normalize_preview_lora_limit(44.6), 45)
+        self.assertEqual(services.normalize_preview_lora_limit(100), 99)
+        self.assertEqual(services.normalize_preview_lora_limit(0), 99)
+        self.assertEqual(services.normalize_preview_lora_limit(-1), 99)
+        self.assertEqual(services.normalize_preview_lora_limit(None, True), 99)
+        self.assertEqual(services.normalize_section_max_width(None), 648)
+        self.assertEqual(services.normalize_section_max_width(100), 320)
+        self.assertEqual(services.normalize_section_max_width(720.6), 721)
+        self.assertEqual(services.normalize_section_max_width(5000), 1200)
+        self.assertEqual(services.normalize_section_max_width("invalid"), 648)
+
     def test_parse_state_preserves_section_and_row_order(self):
         parsed = nodes.parse_state(state([row("A.safetensors")], [row("B.safetensors")]))
         self.assertEqual([entry["name"] for entry in parsed], ["A.safetensors", "B.safetensors"])
@@ -261,6 +275,75 @@ class BackendTests(unittest.TestCase):
         )
         self.assertTrue(result[0].endswith("weights:D-path@1.25"))
         self.assertEqual(result[1], "c-trigger, d-trigger, subject, c-trigger")
+
+    def test_runtime_report_reflects_actual_model_patches_and_skip_reasons(self):
+        entries = [
+            row("A.safetensors", strength=0.75),
+            row("B.safetensors", strength=1.0),
+            row("C.safetensors", strength=0.5, muted=True),
+            row("D.safetensors", enabled=False),
+        ]
+        paths = {
+            "A.safetensors": "A-path",
+            "B.safetensors": "B-path",
+        }
+        events = []
+
+        class FakePatcher:
+            def __init__(self, patches=None):
+                self.patches = {
+                    key: list(values)
+                    for key, values in (patches or {}).items()
+                }
+
+        def resolve(entry):
+            return {
+                "name": entry["name"],
+                "path": paths[entry["name"]],
+                "sha256": entry["sha256"],
+                "size": entry["size"],
+                "renamed": False,
+            }
+
+        def load_file(path, **_kwargs):
+            return {"source": path}, None
+
+        def apply(model, _clip, lora, _strength_model, _strength_clip, lora_metadata=None):
+            del lora_metadata
+            patched = FakePatcher(model.patches)
+            if lora["source"] == "A-path":
+                patched.patches.setdefault("diffusion.weight", []).append(("lora",))
+            return patched, None
+
+        prompt_server = types.SimpleNamespace(
+            client_id="client",
+            send_sync=lambda event, payload, sid=None: events.append((event, payload, sid)),
+        )
+        with (
+            patch.object(nodes.LORA_CATALOG, "resolve", side_effect=resolve),
+            patch.object(nodes.folder_paths, "get_full_path_or_raise", side_effect=lambda _kind, name: paths[name]),
+            patch.object(nodes.comfy.utils, "load_torch_file", side_effect=load_file),
+            patch.object(nodes.comfy.sd, "load_lora_for_models", side_effect=apply),
+            patch.object(nodes.PromptServer, "instance", prompt_server, create=True),
+        ):
+            result = nodes.ApexLoraLoader().load_loras(
+                FakePatcher(),
+                state(entries),
+                unique_id="42",
+            )
+
+        self.assertEqual(len(result[0].patches["diffusion.weight"]), 1)
+        report_event = next(item for item in events if item[0] == "apex-lora-loader/execution-report")
+        report = report_event[1]
+        self.assertEqual(report_event[2], "client")
+        self.assertEqual(report["node_id"], "42")
+        self.assertEqual([item["resolved_name"] for item in report["applied"]], ["A.safetensors"])
+        self.assertEqual(report["applied"][0]["model_patch_entries"], 1)
+        self.assertEqual([item["resolved_name"] for item in report["unmatched"]], ["B.safetensors"])
+        self.assertEqual(
+            [item["reason"] for item in report["skipped"]],
+            ["Temporary 0.00 override", "Disabled"],
+        )
 
     def test_parse_state_defaults_muted_to_false_and_validates_it(self):
         [parsed] = nodes.parse_state(state([row("A.safetensors")]))
@@ -611,7 +694,9 @@ class BackendTests(unittest.TestCase):
             self.assertEqual(saved["state"]["settings"]["overlay_scale"], 0.82)
             self.assertTrue(saved["state"]["settings"]["run_on_change_enabled"])
             self.assertEqual(saved["state"]["settings"]["run_on_change_delay_ms"], 452)
-            self.assertTrue(saved["state"]["settings"]["show_all_enabled_loras"])
+            self.assertEqual(saved["state"]["settings"]["preview_lora_limit"], 99)
+            self.assertEqual(saved["state"]["settings"]["section_max_width"], 648)
+            self.assertNotIn("show_all_enabled_loras", saved["state"]["settings"])
             self.assertEqual(
                 [section["id"] for section in saved["state"]["sections"]],
                 ["section-two", "section-one"],

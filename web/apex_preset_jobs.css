@@ -106,6 +106,13 @@
   border-color: rgba(201, 84, 84, 0.38);
 }
 
+.apex-jobs-status-island:focus-visible,
+.apex-jobs-status:focus-visible,
+.apex-jobs-summary:focus-visible {
+  outline: 1px solid rgba(114, 215, 221, 0.55);
+  outline-offset: 1px;
+}
+
 .apex-jobs-add,
 .apex-jobs-queue,
 .apex-jobs-icon-button {
@@ -450,6 +457,190 @@
   border: 1px solid rgba(91, 145, 161, 0.5);
   border-radius: 7px;
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.36);
+}
+
+.apex-jobs-runtime-preview {
+  position: fixed;
+  z-index: 100001;
+  box-sizing: border-box;
+  width: min(310px, calc(100vw - 16px));
+  max-height: min(410px, calc(100vh - 16px));
+  overflow: auto;
+  color: #d8d9dc;
+  font: 10px/1.35 Inter, "Segoe UI", sans-serif;
+  pointer-events: none;
+  background: #151e27;
+  border: 1px solid rgba(91, 145, 161, 0.52);
+  border-radius: 8px;
+  box-shadow:
+    0 10px 26px rgba(0, 0, 0, 0.46),
+    inset 0 1px rgba(255, 255, 255, 0.025);
+  scrollbar-color: rgba(87, 115, 128, 0.72) transparent;
+  scrollbar-width: thin;
+}
+
+.apex-jobs-runtime-header {
+  display: flex;
+  min-height: 42px;
+  padding: 7px 9px;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(135deg, rgba(43, 70, 82, 0.78), rgba(27, 42, 53, 0.92));
+  border-bottom: 1px solid rgba(91, 122, 137, 0.3);
+}
+
+.apex-jobs-runtime-header > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.apex-jobs-runtime-header strong {
+  overflow: hidden;
+  color: #dce3e6;
+  font-size: 11px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apex-jobs-runtime-header > div > span {
+  overflow: hidden;
+  color: #73818c;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apex-jobs-runtime-badge {
+  flex: none;
+  padding: 3px 7px;
+  color: #86939c;
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(135, 147, 148, 0.2);
+  border-radius: 999px;
+}
+
+.apex-jobs-runtime-badge[data-state="completed"],
+.apex-jobs-runtime-badge[data-state="queued"],
+.apex-jobs-runtime-badge[data-state="running"] {
+  color: #72d7dd;
+  background: rgba(68, 166, 173, 0.12);
+  border-color: rgba(119, 213, 220, 0.3);
+}
+
+.apex-jobs-runtime-badge[data-state="failed"],
+.apex-jobs-runtime-badge[data-state="interrupted"] {
+  color: #f08b91;
+  background: rgba(147, 0, 10, 0.11);
+  border-color: rgba(240, 113, 112, 0.24);
+}
+
+.apex-jobs-runtime-group {
+  padding: 7px 8px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+}
+
+.apex-jobs-runtime-group:last-child { border-bottom: 0; }
+
+.apex-jobs-runtime-label {
+  margin-bottom: 5px;
+  color: #73818c;
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.apex-jobs-runtime-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.apex-jobs-runtime-metric {
+  display: flex;
+  min-width: 0;
+  min-height: 31px;
+  padding: 4px 6px;
+  gap: 1px;
+  flex-direction: column;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(135, 147, 148, 0.12);
+  border-radius: 5px;
+}
+
+.apex-jobs-runtime-metric strong {
+  color: #bdc7cd;
+  font: 600 12px/14px ui-monospace, "Cascadia Code", monospace;
+}
+
+.apex-jobs-runtime-metric span {
+  overflow: hidden;
+  color: #73818c;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apex-jobs-runtime-metric[data-state="queued"] strong,
+.apex-jobs-runtime-metric[data-state="running"] strong { color: #73cfd5; }
+.apex-jobs-runtime-metric[data-state="completed"] strong { color: #72cf9a; }
+.apex-jobs-runtime-metric[data-state="skipped"] strong,
+.apex-jobs-runtime-metric[data-state="not_submitted"] strong { color: #d2a45f; }
+.apex-jobs-runtime-metric[data-state="failed"] strong,
+.apex-jobs-runtime-metric[data-state="interrupted"] strong { color: #e57e84; }
+
+.apex-jobs-runtime-details {
+  display: flex;
+  gap: 3px;
+  flex-direction: column;
+}
+
+.apex-jobs-runtime-detail {
+  display: flex;
+  padding: 5px 6px;
+  gap: 2px;
+  flex-direction: column;
+  overflow-wrap: anywhere;
+  color: #9ba8b1;
+  background: rgba(255, 255, 255, 0.025);
+  border-left: 2px solid rgba(91, 145, 161, 0.34);
+  border-radius: 0 4px 4px 0;
+}
+
+.apex-jobs-runtime-detail strong {
+  color: #c2cbd0;
+  font-size: 9px;
+  font-weight: 620;
+}
+
+.apex-jobs-runtime-detail span { font-size: 8px; }
+.apex-jobs-runtime-detail[data-state="failed"],
+.apex-jobs-runtime-detail[data-state="interrupted"] {
+  color: #eaa0a5;
+  background: rgba(147, 0, 10, 0.09);
+  border-left-color: rgba(240, 113, 112, 0.48);
+}
+.apex-jobs-runtime-detail[data-state="skipped"],
+.apex-jobs-runtime-detail[data-state="not_submitted"] {
+  color: #d7b278;
+  background: rgba(115, 76, 18, 0.09);
+  border-left-color: rgba(214, 168, 92, 0.48);
+}
+
+.apex-jobs-runtime-empty,
+.apex-jobs-runtime-more {
+  padding: 5px 6px;
+  color: #73818c;
+  font-size: 8px;
+  font-style: italic;
 }
 
 .apex-jobs-preview-header {

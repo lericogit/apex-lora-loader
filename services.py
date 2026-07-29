@@ -18,6 +18,43 @@ TRIGGER_WORD_MAX_LENGTH = 2000
 # defensive ceiling, but high enough for very large LoRA installations.
 FOLDER_SYNC_MAX_RULES = 10_000
 FOLDER_SYNC_MAX_ITEMS = 100_000
+DEFAULT_PREVIEW_LORA_LIMIT = 20
+PREVIEW_LORA_LIMIT_MIN = 5
+PREVIEW_LORA_LIMIT_MAX = 99
+DEFAULT_SECTION_MAX_WIDTH = 648
+SECTION_MAX_WIDTH_MIN = 320
+SECTION_MAX_WIDTH_MAX = 1200
+
+
+def normalize_preview_lora_limit(value, legacy_show_all=False):
+    if value is None or isinstance(value, bool):
+        return PREVIEW_LORA_LIMIT_MAX if legacy_show_all is True else DEFAULT_PREVIEW_LORA_LIMIT
+    if not isinstance(value, (int, float)):
+        return DEFAULT_PREVIEW_LORA_LIMIT
+    value = float(value)
+    if not math.isfinite(value):
+        return DEFAULT_PREVIEW_LORA_LIMIT
+    if value <= 0:
+        return PREVIEW_LORA_LIMIT_MAX
+    if value < PREVIEW_LORA_LIMIT_MIN:
+        return PREVIEW_LORA_LIMIT_MIN
+    if value > PREVIEW_LORA_LIMIT_MAX:
+        return PREVIEW_LORA_LIMIT_MAX
+    return int(math.floor(value + 0.5))
+
+
+def normalize_section_max_width(value):
+    if value is None or isinstance(value, bool):
+        return DEFAULT_SECTION_MAX_WIDTH
+    if not isinstance(value, (int, float)):
+        return DEFAULT_SECTION_MAX_WIDTH
+    value = float(value)
+    if not math.isfinite(value):
+        return DEFAULT_SECTION_MAX_WIDTH
+    return max(
+        SECTION_MAX_WIDTH_MIN,
+        min(SECTION_MAX_WIDTH_MAX, int(math.floor(value + 0.5))),
+    )
 
 
 def normalize_lora_name(name):
@@ -552,7 +589,13 @@ class PresetStore:
             "show_safetensors": settings.get("show_safetensors") is not False,
             "show_folder_paths": settings.get("show_folder_paths") is not False,
             "show_trigger_button": settings.get("show_trigger_button") is True,
-            "show_all_enabled_loras": settings.get("show_all_enabled_loras") is True,
+            "preview_lora_limit": normalize_preview_lora_limit(
+                settings.get("preview_lora_limit"),
+                settings.get("show_all_enabled_loras") is True,
+            ),
+            "section_max_width": normalize_section_max_width(
+                settings.get("section_max_width"),
+            ),
             "strength_drag_step": round(drag_step, 2),
             "overlay_scale": round(overlay_scale, 2),
             "run_on_change_enabled": settings.get("run_on_change_enabled") is True,

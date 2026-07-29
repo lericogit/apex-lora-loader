@@ -30,6 +30,8 @@ const SUBMISSION_STATE_EVENT = "apex-preset-jobs/submission-state";
 let openPopover = null;
 let openPresetPreview = null;
 let presetPreviewCloseTimer = null;
+let openRuntimePreview = null;
+let runtimePreviewSequence = 0;
 let activeSubmission = null;
 let queueObserverInstalled = false;
 const batches = new Map();
@@ -131,6 +133,7 @@ function schedulePresetPreviewClose() {
 }
 
 function showPresetPreview(anchor, preset) {
+  closeRuntimePreview();
   closePresetPreview();
   const preview = document.createElement("div");
   preview.className = "apex-jobs-preset-preview";
@@ -195,6 +198,203 @@ function attachPresetPreview(row, preset) {
   row.addEventListener("pointerleave", schedulePresetPreviewClose);
 }
 
+
+function closeRuntimePreview() {
+  if (!openRuntimePreview) return;
+  openRuntimePreview.anchor?.removeAttribute("aria-describedby");
+  openRuntimePreview.element.remove();
+  openRuntimePreview = null;
+}
+
+function runtimeStateLabel(state) {
+  return statusText({ state: state || "ready" });
+}
+
+function appendRuntimeMetrics(preview, labelText, metrics) {
+  const group = document.createElement("section");
+  group.className = "apex-jobs-runtime-group";
+  const label = document.createElement("div");
+  label.className = "apex-jobs-runtime-label";
+  label.textContent = labelText;
+  const grid = document.createElement("div");
+  grid.className = "apex-jobs-runtime-grid";
+  for (const [value, name, state = ""] of metrics) {
+    const metric = document.createElement("div");
+    metric.className = "apex-jobs-runtime-metric";
+    if (state) metric.dataset.state = state;
+    const number = document.createElement("strong");
+    number.textContent = String(value);
+    const text = document.createElement("span");
+    text.textContent = name;
+    metric.append(number, text);
+    grid.appendChild(metric);
+  }
+  group.append(label, grid);
+  preview.appendChild(group);
+}
+
+function appendRuntimeDetails(preview, labelText, details, emptyText = "No additional details") {
+  const group = document.createElement("section");
+  group.className = "apex-jobs-runtime-group";
+  const label = document.createElement("div");
+  label.className = "apex-jobs-runtime-label";
+  label.textContent = labelText;
+  const list = document.createElement("div");
+  list.className = "apex-jobs-runtime-details";
+  const values = details.filter(Boolean);
+  if (!values.length) {
+    const empty = document.createElement("div");
+    empty.className = "apex-jobs-runtime-empty";
+    empty.textContent = emptyText;
+    list.appendChild(empty);
+  } else {
+    for (const detail of values.slice(0, 8)) {
+      const item = document.createElement("div");
+      item.className = "apex-jobs-runtime-detail";
+      if (detail.state) item.dataset.state = detail.state;
+      const name = document.createElement("strong");
+      name.textContent = detail.name;
+      const value = document.createElement("span");
+      value.textContent = detail.value;
+      item.append(name, value);
+      list.appendChild(item);
+    }
+    if (values.length > 8) {
+      const more = document.createElement("div");
+      more.className = "apex-jobs-runtime-more";
+      more.textContent = `+${values.length - 8} more`;
+      list.appendChild(more);
+    }
+  }
+  group.append(label, list);
+  preview.appendChild(group);
+}
+
+function showRuntimePreview(anchor, node, context) {
+  closePresetPreview();
+  closeRuntimePreview();
+  if (!anchor?.isConnected || !node?.__apexJobsState) return;
+  const preview = document.createElement("div");
+  preview.className = "apex-jobs-runtime-preview";
+  preview.id = `apex-jobs-runtime-${++runtimePreviewSequence}`;
+  preview.setAttribute("role", "tooltip");
+  const header = document.createElement("div");
+  header.className = "apex-jobs-runtime-header";
+  const heading = document.createElement("div");
+  const title = document.createElement("strong");
+  const subtitle = document.createElement("span");
+  const badge = document.createElement("span");
+  badge.className = "apex-jobs-runtime-badge";
+
+  if (context.type === "job") {
+    const status = node.__apexJobsStatuses.get(context.job.id) || { state: "ready" };
+    title.textContent = context.job.preset.name;
+    subtitle.textContent = "Preset job execution";
+    badge.textContent = runtimeStateLabel(status.state);
+    badge.dataset.state = status.state || "ready";
+    header.append(heading, badge);
+    heading.append(title, subtitle);
+    preview.appendChild(header);
+    appendRuntimeMetrics(preview, "Snapshot", [
+      [context.job.preset.entries?.length || 0, "Active LoRAs"],
+      [context.index + 1, "Queue position"],
+    ]);
+    appendRuntimeDetails(preview, "Current status", [{
+      name: runtimeStateLabel(status.state),
+      value: status.detail || runtimeStateLabel(status.state),
+      state: status.state,
+    }]);
+  } else if (context.type === "group") {
+    const states = context.group.jobs.map((job) => ({
+      job,
+      status: node.__apexJobsStatuses.get(job.id) || { state: "ready" },
+    }));
+    const counts = statusSummary(context.group.jobs, node.__apexJobsStatuses);
+    title.textContent = context.group.preset.name;
+    subtitle.textContent = "Adjacent grouped preset jobs";
+    badge.textContent = `${context.group.jobs.length} runs`;
+    badge.dataset.state = Object.keys(counts).length === 1 ? Object.keys(counts)[0] : "mixed";
+    heading.append(title, subtitle);
+    header.append(heading, badge);
+    preview.appendChild(header);
+    appendRuntimeMetrics(
+      preview,
+      "Outcomes",
+      Object.entries(counts).map(([state, count]) => [count, runtimeStateLabel(state), state]),
+    );
+    appendRuntimeDetails(preview, "Individual runs", states.map(({ status }, index) => ({
+      name: `Run ${index + 1} · ${runtimeStateLabel(status.state)}`,
+      value: status.detail || runtimeStateLabel(status.state),
+      state: status.state,
+    })));
+  } else {
+    const target = targetLoader(node);
+    const counts = statusSummary(node.__apexJobsState.jobs, node.__apexJobsStatuses);
+    title.textContent = context.type === "summary" ? "Batch overview" : "Preset Jobs status";
+    subtitle.textContent = target.error
+      ? "Connection requires attention"
+      : `Connected to ${target.target.title || "Apex LoRA Loader"} · node ${target.target.id}`;
+    badge.textContent = target.error ? "Disconnected" : "Connected";
+    badge.dataset.state = target.error ? "failed" : "completed";
+    heading.append(title, subtitle);
+    header.append(heading, badge);
+    preview.appendChild(header);
+    appendRuntimeMetrics(preview, "Batch", [
+      [node.__apexJobsState.jobs.length, node.__apexJobsState.jobs.length === 1 ? "Run" : "Runs"],
+      [node.__apexJobsState.jobs.reduce(
+        (total, job) => total + (job.preset.entries?.length || 0),
+        0,
+      ), "Snapshot LoRAs"],
+      ...Object.entries(counts).map(([state, count]) => [count, runtimeStateLabel(state), state]),
+    ]);
+    const details = [];
+    if (target.error) details.push({ name: "Connection", value: target.error, state: "failed" });
+    if (node.__apexJobsMessage?.message) {
+      details.push({
+        name: node.__apexJobsMessage.error ? "Error" : "Latest message",
+        value: node.__apexJobsMessage.message,
+        state: node.__apexJobsMessage.error ? "failed" : "",
+      });
+    }
+    for (const job of node.__apexJobsState.jobs) {
+      const status = node.__apexJobsStatuses.get(job.id);
+      if (!status?.detail || ["ready", "queued", "running", "completed"].includes(status.state)) continue;
+      details.push({
+        name: `${job.preset.name} · ${runtimeStateLabel(status.state)}`,
+        value: status.detail,
+        state: status.state,
+      });
+    }
+    appendRuntimeDetails(preview, "Details", details, "Connected and ready");
+  }
+
+  document.body.appendChild(preview);
+  anchor.setAttribute("aria-describedby", preview.id);
+  const anchorRect = anchor.getBoundingClientRect();
+  const previewRect = preview.getBoundingClientRect();
+  const left = Math.max(
+    8,
+    Math.min(
+      anchorRect.left + (anchorRect.width - previewRect.width) / 2,
+      window.innerWidth - previewRect.width - 8,
+    ),
+  );
+  const below = anchorRect.bottom + 7;
+  const top = below + previewRect.height <= window.innerHeight - 8
+    ? below
+    : Math.max(8, anchorRect.top - previewRect.height - 7);
+  preview.style.left = `${left}px`;
+  preview.style.top = `${top}px`;
+  openRuntimePreview = { element: preview, anchor };
+}
+
+function attachRuntimePreview(anchor, node, context) {
+  anchor.addEventListener("pointerenter", () => showRuntimePreview(anchor, node, context));
+  anchor.addEventListener("pointerleave", closeRuntimePreview);
+  anchor.addEventListener("focusin", () => showRuntimePreview(anchor, node, context));
+  anchor.addEventListener("focusout", closeRuntimePreview);
+}
+
 function createPopover(anchor) {
   closePopover();
   const panel = document.createElement("div");
@@ -228,7 +428,7 @@ function setMessage(node, message = "", error = false) {
   node.__apexJobsMessage = { message, error };
   if (!node.__apexJobsMessageEl) return;
   node.__apexJobsMessageEl.textContent = message;
-  node.__apexJobsMessageEl.title = message;
+  node.__apexJobsMessageEl.setAttribute("aria-label", message || "No current Preset Jobs message");
   node.__apexJobsMessageEl.classList.toggle("error", error);
   node.__apexJobsStatusIslandEl?.classList.toggle("error", error);
 }
@@ -279,22 +479,25 @@ function refreshRuntimeUI(node) {
     for (const element of elements) {
       element.textContent = statusText(status);
       element.dataset.state = status.state;
-      element.title = status.detail || statusText(status);
+      element.setAttribute(
+        "aria-label",
+        `${statusText(status)}${status.detail ? `: ${status.detail}` : ""}`,
+      );
     }
   }
   for (const item of node.__apexJobsGroupStatusEls || []) {
     item.element.textContent = groupStatus(item.group, node.__apexJobsStatuses);
     const states = new Set(item.group.jobs.map((job) => node.__apexJobsStatuses.get(job.id)?.state || "ready"));
     item.element.dataset.state = states.size === 1 ? [...states][0] : "mixed";
-    item.element.title = item.group.jobs
+    item.element.setAttribute("aria-label", item.group.jobs
       .map((job) => `${job.preset.name}: ${node.__apexJobsStatuses.get(job.id)?.detail || statusText(node.__apexJobsStatuses.get(job.id))}`)
-      .join("\n");
+      .join(". "));
   }
   if (node.__apexJobsSummaryEl) {
     const counts = statusSummary(node.__apexJobsState.jobs, node.__apexJobsStatuses);
     const text = Object.entries(counts).map(([state, count]) => `${count} ${statusText({ state })}`).join(" · ");
     node.__apexJobsSummaryEl.textContent = text || "No jobs";
-    node.__apexJobsSummaryEl.title = text;
+    node.__apexJobsSummaryEl.setAttribute("aria-label", text || "No preset jobs");
   }
 }
 
@@ -586,6 +789,7 @@ function installDrag(row, node, sourceIds, targetFirstId) {
   row.draggable = true;
   row.addEventListener("dragstart", (event) => {
     closePresetPreview();
+    closeRuntimePreview();
     node.__apexJobsDragIds = sourceIds;
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", sourceIds.join(","));
@@ -626,6 +830,8 @@ function buildExpandedRow(node, job, index) {
   name.textContent = job.preset.name;
   const status = document.createElement("span");
   status.className = "apex-jobs-status";
+  status.tabIndex = 0;
+  attachRuntimePreview(status, node, { type: "job", job, index });
   const duplicate = iconButton("copy", "Duplicate job");
   duplicate.addEventListener("click", () => { duplicateJob(node.__apexJobsState, job.id); commit(node); });
   const remove = iconButton("x", "Remove job", "danger");
@@ -660,6 +866,8 @@ function buildGroupedRow(node, group, index) {
   count.addEventListener("change", () => { setGroupCount(node.__apexJobsState, group.jobs[0].id, count.value); commit(node); });
   const status = document.createElement("span");
   status.className = "apex-jobs-status apex-jobs-group-status";
+  status.tabIndex = 0;
+  attachRuntimePreview(status, node, { type: "group", group, index });
   const duplicate = iconButton("copy", "Add one run to this group");
   duplicate.addEventListener("click", () => { setGroupCount(node.__apexJobsState, group.jobs[0].id, group.jobs.length + 1); commit(node); });
   const remove = iconButton("x", "Remove group", "danger");
@@ -678,6 +886,7 @@ function renderNode(node) {
   const root = node.__apexJobsRoot;
   if (!root || !node.__apexJobsState) return;
   closePresetPreview();
+  closeRuntimePreview();
   root.replaceChildren();
   node.__apexJobsStatusEls = new Map();
   node.__apexJobsGroupStatusEls = [];
@@ -688,8 +897,6 @@ function renderNode(node) {
   connection.className = "apex-jobs-connection";
   const target = targetLoader(node);
   connection.classList.toggle("connected", !target.error);
-  connection.title = target.error
-    || `Connected to “${target.target.title || "Apex LoRA Loader"}” (node ${target.target.id}). Preset jobs will target this loader.`;
   connection.setAttribute("role", "status");
   connection.setAttribute("aria-label", target.error || `Connected to ${target.target.title || "Apex LoRA Loader"}, node ${target.target.id}`);
   const add = document.createElement("button");
@@ -727,17 +934,22 @@ function renderNode(node) {
   const message = document.createElement("div");
   message.className = `apex-jobs-message${node.__apexJobsMessage?.error ? " error" : ""}`;
   message.textContent = node.__apexJobsMessage?.message || "";
-  message.title = message.textContent;
+  message.setAttribute("aria-label", message.textContent || "No current Preset Jobs message");
   node.__apexJobsMessageEl = message;
   const statusIsland = document.createElement("div");
   statusIsland.className = `apex-jobs-status-island${node.__apexJobsMessage?.error ? " error" : ""}`;
+  statusIsland.tabIndex = 0;
   statusIsland.append(connection, message);
+  attachRuntimePreview(statusIsland, node, { type: "island" });
   node.__apexJobsStatusIslandEl = statusIsland;
   toolbar.append(add, statusIsland, view, clear, queue);
 
   const list = document.createElement("div");
   list.className = "apex-jobs-list";
-  list.addEventListener("scroll", closePresetPreview, { passive: true });
+  list.addEventListener("scroll", () => {
+    closePresetPreview();
+    closeRuntimePreview();
+  }, { passive: true });
   list.addEventListener("dragover", (event) => {
     if (!node.__apexJobsDragIds) return;
     const rect = list.getBoundingClientRect();
@@ -763,6 +975,8 @@ function renderNode(node) {
   count.textContent = `${node.__apexJobsState.jobs.length} run${node.__apexJobsState.jobs.length === 1 ? "" : "s"}`;
   const summary = document.createElement("span");
   summary.className = "apex-jobs-summary";
+  summary.tabIndex = 0;
+  attachRuntimePreview(summary, node, { type: "summary" });
   node.__apexJobsSummaryEl = summary;
   footer.append(count, summary);
   root.append(toolbar, list, footer);
@@ -846,6 +1060,7 @@ app.registerExtension({
       }
       closePopover();
       closePresetPreview();
+      closeRuntimePreview();
       this.__apexJobsRoot?.replaceChildren();
       this.__apexJobsBuilt = false;
       return originalRemoved?.apply(this, arguments);

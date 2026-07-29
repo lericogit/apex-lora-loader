@@ -38,9 +38,15 @@ def parse_state(raw_state):
         raise ValueError("Apex LoRA state sections must be a list.")
 
     rows = []
-    for section in sections:
+    order = 0
+    for section_index, section in enumerate(sections):
         if not isinstance(section, dict) or not isinstance(section.get("loras"), list):
             raise ValueError("Each Apex LoRA section must contain a LoRA list.")
+        section_name = section.get("name")
+        if not isinstance(section_name, str) or not section_name.strip():
+            section_name = f"Section {section_index + 1}"
+        else:
+            section_name = section_name.strip()
         for entry in section["loras"]:
             if not isinstance(entry, dict):
                 raise ValueError("Each Apex LoRA row must be an object.")
@@ -66,6 +72,8 @@ def parse_state(raw_state):
                     f"Trigger position for '{name}' must be prepend or append."
                 )
             rows.append({
+                "order": order,
+                "section": section_name,
                 "id": entry.get("id"),
                 "name": name,
                 "enabled": enabled,
@@ -76,6 +84,7 @@ def parse_state(raw_state):
                 "active_trigger_words": active_trigger_words,
                 "trigger_position": trigger_position,
             })
+            order += 1
     return rows
 
 
@@ -108,6 +117,95 @@ def augment_prompt(prompt, rows):
         parts.append(prompt.strip())
     parts.extend(appended)
     return ", ".join(parts)
+
+
+def _model_patch_inventory(model):
+    """Return per-key patch contribution counts for a Comfy ModelPatcher.
+
+    ``load_lora_for_models`` deliberately remains the authority for converting
+    and installing LoRA patches. Comparing the returned patcher with its input
+    lets diagnostics report what that exact core call installed without
+    duplicating ComfyUI's LoRA matching logic.
+    """
+    try:
+        patches = getattr(model, "patches", None)
+    except Exception:
+        return None
+    if not isinstance(patches, dict):
+        return None
+    inventory = {}
+    try:
+        for key, values in patches.items():
+            try:
+                inventory[key] = len(values)
+            except Exception:
+                inventory[key] = 1
+    except Exception:
+        return None
+    return inventory
+
+
+def _model_patch_delta(before, after):
+    if before is None or after is None:
+        return None
+    try:
+        increased = {
+            key: count - before.get(key, 0)
+            for key, count in after.items()
+            if count > before.get(key, 0)
+        }
+    except Exception:
+        return None
+    return {
+        "keys": len(increased),
+        "entries": sum(increased.values()),
+    }
+
+
+def _runtime_row(entry, **extra):
+    return {
+        "order": entry["order"] + 1,
+        "section": entry["section"],
+        "requested_name": entry["name"],
+        "strength": effective_strength(entry),
+        **extra,
+    }
+
+
+def _send_execution_report(report, unique_id):
+    applied_count = len(report["applied"])
+    unmatched_count = len(report["unmatched"])
+    skipped_count = len(report["skipped"])
+    failed_count = len(report["failed"])
+    logging.info(
+        "Apex LoRA Loader%s runtime report: %d applied, %d unmatched, "
+        "%d skipped, %d failed.",
+        f" node {unique_id}" if unique_id is not None else "",
+        applied_count,
+        unmatched_count,
+        skipped_count,
+        failed_count,
+    )
+    for entry in report["unmatched"]:
+        logging.warning(
+            "Apex LoRA Loader: LoRA '%s' produced no compatible model patches.",
+            entry["resolved_name"],
+        )
+
+    prompt_server = getattr(PromptServer, "instance", None)
+    client_id = getattr(prompt_server, "client_id", None)
+    if unique_id is None or client_id is None:
+        return
+    try:
+        prompt_server.send_sync(
+            "apex-lora-loader/execution-report",
+            {"node_id": str(unique_id), **report},
+            sid=client_id,
+        )
+    except Exception:
+        # Diagnostics must never turn a successful model patch into a failed
+        # workflow execution.
+        logging.exception("Apex LoRA Loader could not send its runtime report.")
 
 
 class ApexLoraLoader:
@@ -158,34 +256,84 @@ class ApexLoraLoader:
         renamed = []
         rows = parse_state(stack_data)
         prompt = augment_prompt(prompt, rows)
+        report = {
+            "applied": [],
+            "unmatched": [],
+            "skipped": [],
+            "failed": [],
+        }
 
         for entry in rows:
             strength = effective_strength(entry)
-            if not entry["enabled"] or strength == 0:
+            if not entry["enabled"]:
+                report["skipped"].append(_runtime_row(entry, reason="Disabled"))
                 continue
-            resolved = LORA_CATALOG.resolve(entry)
-            path = folder_paths.get_full_path_or_raise("loras", resolved["name"])
-            if path not in loaded_loras:
-                loaded_loras[path] = comfy.utils.load_torch_file(
-                    path, safe_load=True, return_metadata=True
+            if entry["muted"]:
+                report["skipped"].append(
+                    _runtime_row(entry, reason="Temporary 0.00 override")
                 )
-            lora, metadata = loaded_loras[path]
-            model, _ = comfy.sd.load_lora_for_models(
-                model,
-                None,
-                lora,
-                strength,
-                0,
-                lora_metadata=metadata,
-            )
-            if resolved["renamed"]:
-                renamed.append({
-                    "row_id": entry["id"],
-                    "old_name": entry["name"],
-                    "name": resolved["name"],
-                    "sha256": resolved["sha256"],
-                    "size": resolved["size"],
-                })
+                continue
+            if strength == 0:
+                report["skipped"].append(_runtime_row(entry, reason="Strength is 0.00"))
+                continue
+
+            resolved = None
+            try:
+                resolved = LORA_CATALOG.resolve(entry)
+                path = folder_paths.get_full_path_or_raise("loras", resolved["name"])
+                reused_file_data = path in loaded_loras
+                if not reused_file_data:
+                    loaded_loras[path] = comfy.utils.load_torch_file(
+                        path, safe_load=True, return_metadata=True
+                    )
+                lora, metadata = loaded_loras[path]
+                before = _model_patch_inventory(model)
+                patched_model, _ = comfy.sd.load_lora_for_models(
+                    model,
+                    None,
+                    lora,
+                    strength,
+                    0,
+                    lora_metadata=metadata,
+                )
+                delta = _model_patch_delta(
+                    before,
+                    _model_patch_inventory(patched_model),
+                )
+                model = patched_model
+                runtime_entry = _runtime_row(
+                    entry,
+                    resolved_name=resolved["name"],
+                    renamed=resolved["renamed"],
+                    source_tensors=len(lora) if isinstance(lora, dict) else None,
+                    model_patch_keys=delta["keys"] if delta is not None else None,
+                    model_patch_entries=delta["entries"] if delta is not None else None,
+                    execution_file_reuse=reused_file_data,
+                )
+                if delta is not None and delta["entries"] == 0:
+                    report["unmatched"].append(runtime_entry)
+                else:
+                    report["applied"].append(runtime_entry)
+                if resolved["renamed"]:
+                    renamed.append({
+                        "row_id": entry["id"],
+                        "old_name": entry["name"],
+                        "name": resolved["name"],
+                        "sha256": resolved["sha256"],
+                        "size": resolved["size"],
+                    })
+            except Exception as error:
+                report["failed"].append(
+                    _runtime_row(
+                        entry,
+                        resolved_name=resolved["name"] if resolved else None,
+                        error=f"{type(error).__name__}: {error}",
+                    )
+                )
+                _send_execution_report(report, unique_id)
+                raise
+
+        _send_execution_report(report, unique_id)
 
         prompt_server = getattr(PromptServer, "instance", None)
         client_id = getattr(prompt_server, "client_id", None)

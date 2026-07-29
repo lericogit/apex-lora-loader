@@ -8,11 +8,18 @@ import {
 
 export const STATE_VERSION = 1;
 export const STRENGTH_DRAG_PIXELS_PER_TICK = 3;
+export const PREVIEW_LORA_LIMIT_MIN = 5;
+export const PREVIEW_LORA_LIMIT_MAX = 99;
+export const DEFAULT_PREVIEW_LORA_LIMIT = 20;
+export const SECTION_MAX_WIDTH_MIN = 320;
+export const SECTION_MAX_WIDTH_MAX = 1200;
+export const DEFAULT_SECTION_MAX_WIDTH = 648;
 export const DEFAULT_SETTINGS = Object.freeze({
   show_safetensors: true,
   show_folder_paths: true,
   show_trigger_button: false,
-  show_all_enabled_loras: false,
+  preview_lora_limit: DEFAULT_PREVIEW_LORA_LIMIT,
+  section_max_width: DEFAULT_SECTION_MAX_WIDTH,
   strength_drag_step: 0.01,
   overlay_scale: 0.88,
   run_on_change_enabled: false,
@@ -156,12 +163,42 @@ function normalizeRunOnChangeDelay(value) {
     : DEFAULT_SETTINGS.run_on_change_delay_ms;
 }
 
+export function normalizePreviewLoraLimit(value, legacyShowAll = false) {
+  if (value === undefined || value === null || typeof value === "boolean") {
+    return legacyShowAll === true
+      ? PREVIEW_LORA_LIMIT_MAX
+      : DEFAULT_PREVIEW_LORA_LIMIT;
+  }
+  const limit = Number(value);
+  if (!Number.isFinite(limit)) return DEFAULT_PREVIEW_LORA_LIMIT;
+  if (limit <= 0) return PREVIEW_LORA_LIMIT_MAX;
+  if (limit < PREVIEW_LORA_LIMIT_MIN) return PREVIEW_LORA_LIMIT_MIN;
+  if (limit > PREVIEW_LORA_LIMIT_MAX) return PREVIEW_LORA_LIMIT_MAX;
+  return Math.round(limit);
+}
+
+export function normalizeSectionMaxWidth(value) {
+  if (value === undefined || value === null || typeof value === "boolean") {
+    return DEFAULT_SECTION_MAX_WIDTH;
+  }
+  const width = Number(value);
+  if (!Number.isFinite(width)) return DEFAULT_SECTION_MAX_WIDTH;
+  return Math.max(
+    SECTION_MAX_WIDTH_MIN,
+    Math.min(SECTION_MAX_WIDTH_MAX, Math.round(width)),
+  );
+}
+
 export function normalizeSettings(value) {
   return {
     show_safetensors: value?.show_safetensors !== false,
     show_folder_paths: value?.show_folder_paths !== false,
     show_trigger_button: value?.show_trigger_button === true,
-    show_all_enabled_loras: value?.show_all_enabled_loras === true,
+    preview_lora_limit: normalizePreviewLoraLimit(
+      value?.preview_lora_limit,
+      value?.show_all_enabled_loras,
+    ),
+    section_max_width: normalizeSectionMaxWidth(value?.section_max_width),
     strength_drag_step: normalizeDragStep(value?.strength_drag_step),
     overlay_scale: normalizeOverlayScale(value?.overlay_scale),
     run_on_change_enabled: value?.run_on_change_enabled === true,

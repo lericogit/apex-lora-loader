@@ -7,7 +7,7 @@
 Organize, filter, reorder, preset, recover, and annotate large LoRA stacks in one compact node.
 
 [![License: MIT][license-shield]][license-link]
-[![Version: v0.5.1][version-shield]][version-link]
+[![Version: v0.5.5][version-shield]][version-link]
 [![ComfyUI Custom Node][comfyui-shield]][comfyui-link]
 [![Local only][local-shield]][local-link]
 [![No extra packages][dependencies-shield]][dependencies-link]
@@ -52,6 +52,7 @@ The node intentionally has no CLIP socket. LoRAs are applied to `MODEL` with zer
 - Installation-wide presets for either active LoRA states or complete node setups, with direct inline management from the custom preset menu.
 - An independent Preset Jobs companion for ordered, repeatable multi-preset queue runs with live results.
 - SHA-256 identities that recover LoRAs after file or folder renames.
+- Runtime diagnostics that report the LoRA patches actually installed by ComfyUI core.
 - Multiple active trigger words per LoRA with per-row prepend or append placement.
 - Two-decimal strengths and configurable horizontal drag increments.
 - A per-row temporary zero key that silences a LoRA from the node without disabling it or losing its strength.
@@ -65,7 +66,7 @@ Sections have stable identities, editable names, enabled counts, collapse contro
 
 When the node becomes wider, Apex creates additional section columns. Each column is an independent vertical stack, so differently sized sections sit directly beneath their own neighbors without forcing matching grid rows. Section placement remains under your control instead of being automatically rebalanced. When the node narrows, unavailable preferred columns merge into the final visible column in deterministic order and return when space is available again.
 
-The section width limits and gap are exposed as CSS variables near the top of `web/apex_lora_loader.css` for easy tuning. Lane membership changes only at responsive column breakpoints; section heights and overall stack height are handled by the browser.
+The per-node **Maximum column width** setting controls how far each section lane can spread while retaining the responsive breakpoints and independent stacking behavior. The underlying minimum width, default maximum, and gap also remain exposed as CSS variables near the top of `web/apex_lora_loader.css`.
 
 New sections are created from the large Add section area directly beneath the final section in a column. It appears only while hovering over available column space and never reserves extra scroll height while hidden. The toolbar remains fixed while the stack uses the remaining node height and scrolls only when its visible content requires it.
 
@@ -112,6 +113,8 @@ Each section can optionally link to one or more recursive LoRA folders from the 
 Detection is event-driven through workflow loading, native ComfyUI refresh, Apex's advanced rescan, and relevant stack changes—there is no polling or background hashing. A count badge appears on the section add button when files are ready. **Sync** verifies identities lazily, recovers renamed rows where possible, appends verified files in deterministic order, and leaves every new row disabled.
 
 Enable **Auto Sync** beside the Sync action to perform that same verified add-only operation after workflow restoration, native ComfyUI refreshes, and Apex advanced rescans. Automatic additions remain disabled, never trigger Run on Change, produce an aggregated native ComfyUI toast summary, and leave a temporary teal `+N` badge on the affected section until its Add LoRA control is opened. Sections awaiting manual synchronization use an amber count badge and are combined into one detection toast with their section names.
+
+When any linked sections have pending files, the overlay toolbar exposes **Sync all** with the combined count. Its compact preview lists every destination section and LoRA, while one batched identity pass synchronizes all eligible sections and reports the combined result through the node status and a native ComfyUI notification.
 
 Synchronization is deliberately add-only. Removing, replacing, or moving a linked row records its former identity under **Ignored LoRAs**, preventing the section from immediately restoring it. Pending files can also be ignored directly, and **Allow again** makes an ignored entry eligible once more. Individual verification failures remain listed without blocking successful files.
 
@@ -181,11 +184,19 @@ Preset Jobs uses ComfyUI's normal per-prompt queue path. Existing seed controls 
   <sub>Build an ordered queue from frozen active presets, duplicate or rearrange jobs, and monitor each run individually.</sub>
 </p>
 
+### Execution diagnostics
+
+Every uncached loader execution emits a collapsed browser-console report derived from the model patches returned by ComfyUI's own `load_lora_for_models` path. It distinguishes LoRAs that installed model patches, files that matched no compatible model keys, rows intentionally skipped because they were disabled, muted, or set to `0.00`, and failures that stopped loading. Reports include visual execution order, section, resolved filename, effective strength, rename recovery, and installed patch-key and patch-entry counts when the active ComfyUI model patcher exposes them.
+
+When ComfyUI reuses the loader's cached output, Apex logs that no new core LoRA calls were made instead of presenting stale information as a fresh application report. Diagnostics are observational only and do not replace or alter ComfyUI's loading behavior.
+
 ### Rename-safe identities
 
 When a LoRA is selected, Apex records its canonical relative path, file size, and SHA-256 digest. If the exact path later disappears, same-size files are checked for the stored digest. A content match updates the row to its new canonical path; changed contents are treated as a different LoRA.
 
 Exact existing paths always win, and identical duplicate files resolve deterministically. The hash cache contains only a bounded set of digest strings keyed by path, size, and modification time.
+
+If distinct rows carry the same verified SHA-256 identity, the compact and overlay summaries expose a persistent duplicate-set warning. The check follows stable row identities, ignores stale repeated references to the same logical row, and clears as soon as the duplicate row is removed.
 
 ComfyUI's native **Refresh Node Definitions** action refreshes Apex's lightweight filename and folder catalog, so newly added LoRAs appear in choosers without identity analysis. Apex's own refresh button remains the explicit advanced rescan for rename recovery, hashes, and saved metadata verification.
 
@@ -212,7 +223,7 @@ The row tag button is hidden by default and can be enabled in Settings.
 
 The node itself shows a compact read-only summary of the stack: section and LoRA counts, and one line per enabled LoRA with its strength and temporary zero key. Editing happens in the overlay editor opened from the node.
 
-By default the list shows the first twenty enabled LoRAs and closes with a `+N more enabled` hint. Enable **List every enabled LoRA** in Settings to list all of them instead. The list scrolls either way, so a taller node simply shows more rows at once. The setting is stored per node and is saved with Full setup presets.
+By default the compact node lists the first twenty enabled LoRAs and closes with a `+N more enabled` hint. **Enabled LoRAs shown** in Settings lets you choose a per-node limit from 5 to 99; the list remains scrollable, so a taller node reveals more rows at once. The limit is also preserved by Full setup presets.
 
 ### Settings
 
@@ -221,7 +232,8 @@ The compact settings popup provides per-node controls for:
 - Showing or hiding the `.safetensors` extension.
 - Showing full relative paths or only LoRA filenames.
 - Showing or hiding trigger-word buttons.
-- Listing every enabled LoRA on the node instead of the first twenty.
+- Choosing how many enabled LoRAs the compact node lists.
+- Adjusting the maximum width of each editor section column.
 - Setting the strength drag increment.
 - Previewing saved hashes and trigger-word metadata.
 - Deleting individual saved identity records directly from the metadata list.
@@ -315,7 +327,7 @@ Embedded Lucide icons retain their ISC terms, and Feather-derived Lucide icons r
 
 [license-shield]: https://img.shields.io/badge/license-MIT-2ea44f?style=flat-square
 [license-link]: LICENSE
-[version-shield]: https://img.shields.io/badge/version-v0.5.1-1f6feb?style=flat-square
+[version-shield]: https://img.shields.io/badge/version-v0.5.5-1f6feb?style=flat-square
 [version-link]: https://github.com/lericogit/apex-lora-loader/releases
 [comfyui-shield]: https://img.shields.io/badge/ComfyUI-custom_node-6f42c1?style=flat-square
 [comfyui-link]: https://github.com/Comfy-Org/ComfyUI

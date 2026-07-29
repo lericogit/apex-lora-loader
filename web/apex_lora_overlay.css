@@ -1,6 +1,7 @@
 .apex-editor-overlay,
 .apex-lora-preview,
-.apex-preview-trigger-tooltip {
+.apex-preview-trigger-tooltip,
+.apex-toolbar-info-tooltip {
   --apex-bg: #0f141a;
   --apex-surface: #181c23;
   --apex-node: #22252b;
@@ -153,6 +154,12 @@
   padding-inline: 12px;
 }
 
+.apex-editor-header .apex-toolbar-info:focus-visible {
+  border-color: rgba(119, 213, 220, .36);
+  outline: none;
+  box-shadow: inset 0 0 0 1px rgba(68, 166, 173, .1);
+}
+
 .apex-editor-status {
   box-sizing: border-box;
   display: flex;
@@ -197,6 +204,18 @@
 .apex-editor-status.idle .apex-editor-status-dot {
   background: #69777a;
   box-shadow: none;
+}
+
+.apex-editor-status.idle.warning {
+  display: flex;
+  border-color: rgba(214, 168, 92, .26);
+  background: rgba(115, 76, 18, .14);
+  color: var(--apex-mute);
+}
+
+.apex-editor-status.idle.warning .apex-editor-status-dot {
+  background: var(--apex-mute);
+  box-shadow: 0 0 7px rgba(214, 168, 92, .32);
 }
 
 .apex-editor-status.error {
@@ -459,6 +478,16 @@
   background: rgba(68, 166, 173, .07);
 }
 
+.apex-preview-summary:focus-visible {
+  outline: 1px solid rgba(119, 213, 220, .58);
+  outline-offset: 1px;
+}
+
+.apex-preview-summary.duplicates {
+  border-color: rgba(214, 168, 92, .28);
+  background: rgba(115, 76, 18, .1);
+}
+
 .apex-preview-summary-item {
   display: inline-flex;
   gap: 3px;
@@ -470,8 +499,18 @@
   font-weight: 600;
 }
 
-.apex-preview-summary-item.enabled strong {
+.apex-preview-summary-item.active strong {
   color: var(--apex-primary);
+}
+
+.apex-preview-summary-item.muted,
+.apex-preview-summary-item.muted strong {
+  color: var(--apex-mute);
+}
+
+.apex-preview-summary-item.duplicate,
+.apex-preview-summary-item.duplicate strong {
+  color: var(--apex-mute);
 }
 
 .apex-preview-summary-item.error,
@@ -634,6 +673,279 @@
   pointer-events: none;
   scrollbar-color: rgba(87, 115, 128, .72) transparent;
   scrollbar-width: thin;
+}
+
+.apex-toolbar-info-tooltip {
+  position: fixed;
+  z-index: 100001;
+  box-sizing: border-box;
+  width: min(286px, calc(100vw - 16px));
+  max-height: min(360px, calc(100vh - 16px));
+  overflow: auto;
+  border: 1px solid rgba(91, 145, 161, .52);
+  border-radius: 8px;
+  background: #151e27;
+  box-shadow:
+    0 10px 26px rgba(0, 0, 0, .46),
+    inset 0 1px rgba(255, 255, 255, .025);
+  color: var(--apex-text);
+  font: 10px/1.35 var(--apex-body-font);
+  pointer-events: none;
+  scrollbar-color: rgba(87, 115, 128, .72) transparent;
+  scrollbar-width: thin;
+}
+
+.apex-info-tooltip-header {
+  display: flex;
+  min-height: 31px;
+  padding: 5px 7px;
+  gap: 7px;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(91, 122, 137, .3);
+  background:
+    linear-gradient(135deg, rgba(43, 70, 82, .78), rgba(27, 42, 53, .92));
+}
+
+.apex-info-tooltip-heading {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.apex-info-tooltip-heading strong {
+  color: var(--apex-text);
+  font: 600 10px/13px var(--apex-heading-font);
+  letter-spacing: .01em;
+}
+
+.apex-info-tooltip-heading span {
+  color: var(--apex-text-dim);
+  font: 8px/11px var(--apex-code-font);
+}
+
+.apex-info-tooltip-activity {
+  padding: 2px 6px;
+  flex: none;
+  border: 1px solid rgba(135, 147, 148, .2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .035);
+  color: var(--apex-text-dim);
+  font: 600 8px/11px var(--apex-code-font);
+  letter-spacing: .035em;
+  text-transform: uppercase;
+}
+
+.apex-info-tooltip-activity.active {
+  border-color: rgba(119, 213, 220, .3);
+  background: rgba(68, 166, 173, .12);
+  color: var(--apex-primary);
+}
+
+.apex-info-tooltip-activity.warning,
+.apex-info-tooltip-activity.muted {
+  border-color: rgba(214, 168, 92, .3);
+  background: rgba(115, 76, 18, .12);
+  color: var(--apex-mute);
+}
+
+.apex-info-tooltip-activity.error {
+  border-color: rgba(240, 113, 112, .28);
+  background: rgba(147, 0, 10, .12);
+  color: var(--apex-error-soft);
+}
+
+.apex-info-tooltip-group,
+.apex-info-tooltip-duplicates {
+  display: grid;
+  min-height: 27px;
+  padding: 4px 7px;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, .045);
+}
+
+.apex-info-tooltip-group:last-child,
+.apex-info-tooltip-duplicates:last-child { border-bottom: 0; }
+
+.apex-info-tooltip-label {
+  display: flex;
+  min-height: 17px;
+  margin-bottom: 0;
+  align-items: center;
+  color: var(--apex-text-dim);
+  font: 600 8px/11px var(--apex-code-font);
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+
+.apex-info-tooltip-grid {
+  display: flex;
+  min-width: 0;
+  gap: 0;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.apex-info-tooltip-metric {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 17px;
+  padding: 1px 6px;
+  gap: 3px;
+  align-items: center;
+  border: 0;
+  border-left: 1px solid rgba(135, 147, 148, .15);
+  border-radius: 0;
+  background: transparent;
+}
+
+.apex-info-tooltip-metric:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.apex-info-tooltip-metric strong {
+  color: var(--apex-text-soft);
+  font: 600 10px/12px var(--apex-code-font);
+}
+
+.apex-info-tooltip-metric span {
+  overflow: hidden;
+  color: var(--apex-text-dim);
+  font: 8px/10px var(--apex-body-font);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apex-info-tooltip-metric.active strong { color: var(--apex-primary); }
+.apex-info-tooltip-metric.muted strong,
+.apex-info-tooltip-metric.warning strong { color: var(--apex-mute); }
+.apex-info-tooltip-metric.error strong { color: var(--apex-error-soft); }
+
+.apex-folder-sync-info-tooltip {
+  width: min(340px, calc(100vw - 16px));
+}
+
+.apex-folder-sync-tooltip-status {
+  display: block;
+  padding-block: 5px;
+}
+
+.apex-folder-sync-tooltip-status > .apex-info-tooltip-label {
+  display: none;
+}
+
+.apex-folder-sync-tooltip-status > .apex-info-tooltip-grid {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  row-gap: 4px;
+}
+
+.apex-folder-sync-tooltip-status .apex-info-tooltip-metric {
+  padding-inline: 7px;
+}
+
+.apex-folder-sync-tooltip-status .apex-info-tooltip-metric:nth-child(3n + 1) {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.apex-info-tooltip-duplicate-list {
+  display: flex;
+  gap: 3px;
+  flex-direction: column;
+}
+
+.apex-info-tooltip-duplicate {
+  padding: 4px 6px;
+  overflow-wrap: anywhere;
+  border-left: 2px solid rgba(214, 168, 92, .52);
+  border-radius: 0 4px 4px 0;
+  background: rgba(115, 76, 18, .1);
+  color: var(--apex-text-soft);
+  font: 8px/11px var(--apex-code-font);
+}
+
+.apex-info-tooltip-more {
+  padding: 3px 6px 0;
+  color: var(--apex-text-dim);
+  font: italic 8px/11px var(--apex-body-font);
+}
+
+.apex-info-tooltip-empty {
+  padding: 5px 6px;
+  border: 1px dashed rgba(135, 147, 148, .14);
+  border-radius: 4px;
+  color: var(--apex-text-dim);
+  font: italic 8px/11px var(--apex-body-font);
+}
+
+.apex-sync-all-tooltip {
+  width: min(340px, calc(100vw - 16px));
+  max-height: min(390px, calc(100vh - 16px));
+}
+
+.apex-sync-all-tooltip-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.apex-sync-all-tooltip-row {
+  display: grid;
+  min-height: 23px;
+  padding: 3px 7px;
+  grid-template-columns: minmax(76px, .42fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, .045);
+}
+
+.apex-sync-all-tooltip-row:last-child { border-bottom: 0; }
+
+.apex-sync-all-tooltip-section,
+.apex-sync-all-tooltip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apex-sync-all-tooltip-section {
+  color: var(--apex-primary);
+  font: 600 9px/12px var(--apex-body-font);
+}
+
+.apex-sync-all-tooltip-name {
+  color: var(--apex-text-soft);
+  font: 9px/12px var(--apex-code-font);
+}
+
+.apex-info-tooltip-detail {
+  padding: 7px 8px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, .045);
+}
+
+.apex-info-tooltip-detail:last-child { border-bottom: 0; }
+
+.apex-info-tooltip-detail code,
+.apex-info-tooltip-error-copy {
+  display: block;
+  padding: 5px 6px;
+  overflow-wrap: anywhere;
+  border: 1px solid rgba(135, 147, 148, .12);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, .16);
+  color: var(--apex-text-soft);
+  font: 8px/11px var(--apex-code-font);
+}
+
+.apex-info-tooltip-detail.error .apex-info-tooltip-error-copy {
+  border-color: rgba(240, 113, 112, .22);
+  background: rgba(147, 0, 10, .1);
+  color: var(--apex-error-soft);
 }
 
 .apex-trigger-tooltip-header {

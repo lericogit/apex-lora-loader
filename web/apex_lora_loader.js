@@ -2,6 +2,10 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import {
   DEFAULT_SETTINGS,
+  PREVIEW_LORA_LIMIT_MAX,
+  PREVIEW_LORA_LIMIT_MIN,
+  SECTION_MAX_WIDTH_MAX,
+  SECTION_MAX_WIDTH_MIN,
   STRENGTH_DRAG_PIXELS_PER_TICK,
   addSection as addSectionToState,
   addTriggerWord,
@@ -19,6 +23,8 @@ import {
   moveRow,
   moveSection,
   normalizeSettings,
+  normalizePreviewLoraLimit,
+  normalizeSectionMaxWidth,
   normalizeState,
   normalizeTriggerMetadata,
   normalizeTriggerPosition,
@@ -38,9 +44,9 @@ import {
 } from "./state.js";
 import { createSingleOwnerController } from "./overlay_controller.js";
 import {
-  DEFAULT_PREVIEW_ROW_LIMIT,
   previewDisplayName,
   previewSummary,
+  previewSummaryTooltip,
 } from "./overlay_state.js";
 import { activeLoraSignature, createAutoQueueController } from "./auto_queue.js";
 import {
@@ -68,6 +74,7 @@ import {
   resetSectionSyncBaseline,
   summarizeSectionSyncDetections,
 } from "./section_sync.js";
+import { logCachedExecution, logExecutionReport } from "./execution_debug.js";
 
 const NODE_CLASS = "ApexLoraLoader";
 const DATA_WIDGET = "stack_data";
@@ -99,6 +106,8 @@ let dragPayload = null;
 let editorView = null;
 let openTriggerPreview = null;
 let triggerPreviewSequence = 0;
+let openToolbarInfoTooltip = null;
+let toolbarInfoTooltipSequence = 0;
 let presetJobsSubmissionBusy = false;
 let autoSyncPassQueue = Promise.resolve();
 let startupSectionSyncTimer = null;
@@ -553,10 +562,12 @@ function updateStatusElement(element, message = "", error = false) {
   if (!element) return;
   const idleLabel = element.dataset.idleLabel || "";
   const visibleMessage = message || idleLabel;
+  const idleWarning = !message && element.dataset.idleWarning === "true";
   const messageElement = element.__apexMessageElement || element;
   messageElement.textContent = visibleMessage;
   element.classList.toggle("idle", !message);
   element.classList.toggle("error", Boolean(message) && error);
+  element.classList.toggle("warning", idleWarning);
   element.title = message || idleLabel;
 }
 
@@ -880,6 +891,360 @@ function attachTriggerPreview(anchor, node, row) {
 }
 
 
+function closeToolbarInfoTooltip() {
+  if (!openToolbarInfoTooltip) return;
+  openToolbarInfoTooltip.anchor?.removeAttribute("aria-describedby");
+  openToolbarInfoTooltip.element.remove();
+  openToolbarInfoTooltip = null;
+}
+
+
+function mountToolbarInfoTooltip(anchor, tooltip, placement = "center") {
+  document.body.appendChild(tooltip);
+  anchor.setAttribute("aria-describedby", tooltip.id);
+  const anchorRect = anchor.getBoundingClientRect();
+  const tooltipRect = tooltip.getBoundingClientRect();
+  let left;
+  if (placement === "side") {
+    const rightSpace = window.innerWidth - anchorRect.right;
+    left = rightSpace >= tooltipRect.width + 8
+      ? anchorRect.right + 8
+      : Math.max(8, anchorRect.left - tooltipRect.width - 8);
+  } else {
+    left = Math.max(
+      8,
+      Math.min(
+        anchorRect.left + (anchorRect.width - tooltipRect.width) / 2,
+        window.innerWidth - tooltipRect.width - 8,
+      ),
+    );
+  }
+  const below = anchorRect.bottom + 7;
+  const top = below + tooltipRect.height <= window.innerHeight - 8
+    ? below
+    : Math.max(8, anchorRect.top - tooltipRect.height - 7);
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${top}px`;
+  openToolbarInfoTooltip = { element: tooltip, anchor };
+}
+
+
+function createInfoTooltip(titleText, subtitleText, badgeText, badgeClass = "") {
+  const tooltip = document.createElement("div");
+  tooltip.className = "apex-toolbar-info-tooltip";
+  tooltip.id = `apex-toolbar-info-${++toolbarInfoTooltipSequence}`;
+  tooltip.setAttribute("role", "tooltip");
+  const header = document.createElement("div");
+  header.className = "apex-info-tooltip-header";
+  const heading = document.createElement("div");
+  heading.className = "apex-info-tooltip-heading";
+  const title = document.createElement("strong");
+  title.textContent = titleText;
+  const subtitle = document.createElement("span");
+  subtitle.textContent = subtitleText;
+  heading.appendChild(title);
+  if (subtitleText) heading.appendChild(subtitle);
+  const badge = document.createElement("span");
+  badge.className = `apex-info-tooltip-activity${badgeClass ? ` ${badgeClass}` : ""}`;
+  badge.textContent = badgeText;
+  header.append(heading, badge);
+  tooltip.appendChild(header);
+  return tooltip;
+}
+
+
+function appendInfoMetrics(tooltip, labelText, metrics) {
+  const group = document.createElement("section");
+  group.className = "apex-info-tooltip-group";
+  const label = document.createElement("div");
+  label.className = "apex-info-tooltip-label";
+  label.textContent = labelText;
+  const grid = document.createElement("div");
+  grid.className = "apex-info-tooltip-grid";
+  for (const [value, name, className = ""] of metrics) {
+    const metric = document.createElement("div");
+    metric.className = `apex-info-tooltip-metric${className ? ` ${className}` : ""}`;
+    const number = document.createElement("strong");
+    number.textContent = String(value);
+    const text = document.createElement("span");
+    text.textContent = name;
+    metric.append(number, text);
+    grid.appendChild(metric);
+  }
+  group.append(label, grid);
+  tooltip.appendChild(group);
+  return group;
+}
+
+
+function appendInfoList(tooltip, labelText, values, emptyText = "None", limit = 6) {
+  const group = document.createElement("section");
+  group.className = "apex-info-tooltip-duplicates";
+  const label = document.createElement("div");
+  label.className = "apex-info-tooltip-label";
+  label.textContent = labelText;
+  const list = document.createElement("div");
+  list.className = "apex-info-tooltip-duplicate-list";
+  const shown = values.slice(0, limit);
+  if (!shown.length) {
+    const empty = document.createElement("div");
+    empty.className = "apex-info-tooltip-empty";
+    empty.textContent = emptyText;
+    list.appendChild(empty);
+  } else {
+    for (const value of shown) {
+      const item = document.createElement("div");
+      item.className = "apex-info-tooltip-duplicate";
+      item.textContent = value;
+      list.appendChild(item);
+    }
+    if (values.length > limit) {
+      const more = document.createElement("div");
+      more.className = "apex-info-tooltip-more";
+      more.textContent = `+${values.length - limit} more`;
+      list.appendChild(more);
+    }
+  }
+  group.append(label, list);
+  tooltip.appendChild(group);
+}
+
+
+function showToolbarInfoTooltip(anchor, node) {
+  closeToolbarInfoTooltip();
+  if (!anchor?.isConnected || !node?.__apexState) return;
+  const summary = previewSummary(node.__apexState);
+  const tooltip = createInfoTooltip(
+    "LoRA stack overview",
+    "",
+    `${summary.effectiveRows} active`,
+    summary.effectiveRows ? "active" : "",
+  );
+  appendInfoMetrics(tooltip, "Stack", [
+    [summary.sectionCount, summary.sectionCount === 1 ? "Section" : "Sections"],
+    [summary.totalRows, summary.totalRows === 1 ? "LoRA" : "LoRAs"],
+  ]);
+  appendInfoMetrics(tooltip, "Execution", [
+    [summary.effectiveRows, "Active", "active"],
+    [summary.enabledRows, "Enabled"],
+    [summary.mutedRows, "Muted", summary.mutedRows ? "muted" : ""],
+    [summary.zeroStrengthRows, "At 0.00"],
+  ]);
+
+  const duplicateGroups = summary.duplicateGroups || [];
+  if (summary.errorRows || duplicateGroups.length) {
+    const attention = [];
+    if (summary.errorRows) {
+      attention.push([
+        summary.errorRows,
+        summary.errorRows === 1 ? "Issue" : "Issues",
+        "error",
+      ]);
+    }
+    if (duplicateGroups.length) {
+      attention.push([
+        duplicateGroups.length,
+        duplicateGroups.length === 1 ? "Duplicate set" : "Duplicate sets",
+        "warning",
+      ]);
+    }
+    appendInfoMetrics(tooltip, "Attention", attention);
+  }
+  mountToolbarInfoTooltip(anchor, tooltip);
+}
+
+
+function attachToolbarInfoTooltip(anchor, node) {
+  anchor.addEventListener("pointerenter", () => showToolbarInfoTooltip(anchor, node));
+  anchor.addEventListener("pointerleave", closeToolbarInfoTooltip);
+  anchor.addEventListener("focusin", () => showToolbarInfoTooltip(anchor, node));
+  anchor.addEventListener("focusout", closeToolbarInfoTooltip);
+}
+
+
+function attachDynamicInfoTooltip(anchor, show) {
+  anchor.addEventListener("pointerenter", () => show(anchor));
+  anchor.addEventListener("pointerleave", closeToolbarInfoTooltip);
+  anchor.addEventListener("focusin", () => show(anchor));
+  anchor.addEventListener("focusout", closeToolbarInfoTooltip);
+}
+
+
+function folderRuleLabel(folder) {
+  return folder || "(LoRA root)";
+}
+
+
+function showFolderSyncInfoTooltip(anchor, node, sectionId) {
+  closeToolbarInfoTooltip();
+  const section = sectionById(node, sectionId);
+  if (!anchor?.isConnected || !section) return;
+  const status = sectionSyncStatus(node, sectionId);
+  const config = status.config;
+  const autoAdded = node.__apexFolderAutoSyncAdded?.get(sectionId) || 0;
+  const linked = [
+    ...config.include_folders.map((folder) => `${folderRuleLabel(folder)} · recursive`),
+    ...config.include_direct.map((folder) => `${folderRuleLabel(folder)} · direct files`),
+  ];
+  const excluded = [
+    ...config.exclude_folders.map((folder) => `${folderRuleLabel(folder)} · subtree`),
+    ...config.exclude_direct.map((folder) => `${folderRuleLabel(folder)} · direct files`),
+  ];
+  const mode = !config.enabled
+    ? "Off"
+    : config.mode === "new"
+      ? "New only"
+      : "Folder mirror";
+  const tooltip = createInfoTooltip(
+    "Section folder sync",
+    section.name || "Unnamed section",
+    mode,
+    config.enabled ? "active" : "",
+  );
+  tooltip.classList.add("apex-folder-sync-info-tooltip");
+  const statusGroup = appendInfoMetrics(tooltip, "Status", [
+    [linked.length, linked.length === 1 ? "Linked rule" : "Linked rules"],
+    [excluded.length, excluded.length === 1 ? "Exclusion" : "Exclusions"],
+    [status.actionable.length, "Awaiting sync", status.actionable.length ? "warning" : ""],
+    [config.ignored.length, "Ignored LoRAs"],
+    [autoAdded, "Auto-synced", autoAdded ? "active" : ""],
+    [config.auto_sync ? "On" : "Off", "Auto Sync", config.auto_sync ? "active" : ""],
+  ]);
+  statusGroup.classList.add("apex-folder-sync-tooltip-status");
+  appendInfoList(tooltip, "Linked folders", linked, "No folders linked");
+  if (excluded.length) appendInfoList(tooltip, "Excluded folders", excluded);
+  if (status.actionable.length) {
+    appendInfoList(tooltip, "Waiting LoRAs", status.actionable, "Everything is synchronized");
+  }
+  mountToolbarInfoTooltip(anchor, tooltip, "side");
+}
+
+
+function showSyncAllInfoTooltip(anchor, node) {
+  closeToolbarInfoTooltip();
+  if (!anchor?.isConnected || !node?.__apexState) return;
+  const summary = pendingSectionSyncSummary(node);
+  if (!summary.count) return;
+  const tooltip = createInfoTooltip(
+    "Pending folder sync",
+    "",
+    `${summary.count} LoRA${summary.count === 1 ? "" : "s"}`,
+    "active",
+  );
+  tooltip.classList.add("apex-sync-all-tooltip");
+  const list = document.createElement("div");
+  list.className = "apex-sync-all-tooltip-list";
+  const showExtension = node.__apexState.settings.show_safetensors;
+  for (const item of summary.work) {
+    for (const loraName of item.names) {
+      const row = document.createElement("div");
+      row.className = "apex-sync-all-tooltip-row";
+      const section = document.createElement("span");
+      section.className = "apex-sync-all-tooltip-section";
+      section.textContent = item.sectionName || "Unnamed section";
+      section.title = section.textContent;
+      const name = document.createElement("span");
+      name.className = "apex-sync-all-tooltip-name";
+      const file = splitName(loraName).file;
+      name.textContent = showExtension
+        ? file
+        : file.replace(/\.safetensors$/i, "");
+      name.title = loraName;
+      row.append(section, name);
+      list.appendChild(row);
+    }
+  }
+  tooltip.appendChild(list);
+  mountToolbarInfoTooltip(anchor, tooltip);
+}
+
+
+function formatSavedDataSize(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes < 0) return "Unknown";
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let amount = bytes;
+  let unit = -1;
+  do {
+    amount /= 1024;
+    unit += 1;
+  } while (amount >= 1024 && unit < units.length - 1);
+  return `${amount >= 10 ? amount.toFixed(1) : amount.toFixed(2)} ${units[unit]}`;
+}
+
+
+function showSavedDataInfoTooltip(anchor, entry) {
+  closeToolbarInfoTooltip();
+  if (!anchor?.isConnected || !entry) return;
+  const metadata = normalizeTriggerMetadata(entry);
+  const tooltip = createInfoTooltip(
+    "Saved LoRA identity",
+    entry.name || "Unnamed LoRA",
+    `${metadata.active_trigger_words.length}/${metadata.trigger_words.length} active`,
+    metadata.active_trigger_words.length ? "active" : "",
+  );
+  appendInfoMetrics(tooltip, "Identity", [
+    [String(entry.sha256 || "").slice(0, 12) || "—", "SHA-256 prefix"],
+    [formatSavedDataSize(entry.size), "File size"],
+    [metadata.trigger_words.length, "Saved triggers"],
+    [metadata.active_trigger_words.length, "Active triggers", metadata.active_trigger_words.length ? "active" : ""],
+  ]);
+  appendInfoList(
+    tooltip,
+    "Active trigger words",
+    metadata.active_trigger_words,
+    "No trigger words are active",
+  );
+  if (metadata.trigger_words.length) {
+    appendInfoList(tooltip, "All saved trigger words", metadata.trigger_words);
+  }
+  const identity = document.createElement("section");
+  identity.className = "apex-info-tooltip-detail";
+  const label = document.createElement("div");
+  label.className = "apex-info-tooltip-label";
+  label.textContent = "Full SHA-256";
+  const value = document.createElement("code");
+  value.textContent = entry.sha256 || "Unavailable";
+  identity.append(label, value);
+  tooltip.appendChild(identity);
+  mountToolbarInfoTooltip(anchor, tooltip, "side");
+}
+
+
+function showLoraErrorInfoTooltip(anchor, node, section, row) {
+  closeToolbarInfoTooltip();
+  if (!anchor?.isConnected || !row?.error) return;
+  const muted = isMuted(row);
+  const effectiveStrength = row.enabled && !muted ? Number(row.strength) || 0 : 0;
+  const tooltip = createInfoTooltip(
+    "LoRA cannot be resolved",
+    section?.name || "Unnamed section",
+    "Issue",
+    "error",
+  );
+  appendInfoMetrics(tooltip, "Row state", [
+    [row.enabled ? "Yes" : "No", "Checkbox enabled"],
+    [muted ? "Yes" : "No", "Temporarily muted", muted ? "muted" : ""],
+    [formatStrength(row.strength), "Saved strength"],
+    [formatStrength(effectiveStrength), "Effective strength"],
+  ]);
+  appendInfoList(tooltip, "Requested file", [row.name]);
+  const detail = document.createElement("section");
+  detail.className = "apex-info-tooltip-detail error";
+  const label = document.createElement("div");
+  label.className = "apex-info-tooltip-label";
+  label.textContent = "Resolution error";
+  const value = document.createElement("div");
+  value.className = "apex-info-tooltip-error-copy";
+  value.textContent = row.error;
+  detail.append(label, value);
+  tooltip.appendChild(detail);
+  if (row.sha256) appendInfoList(tooltip, "Saved identity", [row.sha256]);
+  mountToolbarInfoTooltip(anchor, tooltip, "side");
+}
+
+
 function closeOpenPopover() {
   openPopover?.close();
   openPopover = null;
@@ -1018,6 +1383,24 @@ function recordSectionSyncAddition(section, row) {
     catalogCache?.loras,
   );
   return true;
+}
+
+
+function removeCurrentRow(node, rowId) {
+  let removed = 0;
+  for (const section of node.__apexState?.sections || []) {
+    const retained = [];
+    for (const row of section.loras || []) {
+      if (row.id !== rowId) {
+        retained.push(row);
+        continue;
+      }
+      recordSectionSyncRemoval(section, row);
+      removed += 1;
+    }
+    if (retained.length !== section.loras.length) section.loras = retained;
+  }
+  return removed;
 }
 
 
@@ -1516,6 +1899,7 @@ function applySectionSyncResolution(
   resolved,
   catalogNames,
   automatic = false,
+  commitChanges = true,
 ) {
   const section = sectionById(node, sectionId);
   if (!section) return { aborted: true, added: 0, renamed: 0, failed: 0 };
@@ -1596,7 +1980,9 @@ function applySectionSyncResolution(
       (node.__apexFolderAutoSyncAdded.get(sectionId) || 0) + added,
     );
   }
-  commit(node, { fullPresetDirty: true, folderSyncDirty: true });
+  if (commitChanges) {
+    commit(node, { fullPresetDirty: true, folderSyncDirty: true });
+  }
   return {
     aborted: false,
     sectionId,
@@ -1605,6 +1991,149 @@ function applySectionSyncResolution(
     renamed,
     failed: errors.size,
   };
+}
+
+
+function pendingSectionSyncWork(node) {
+  if (!node?.__apexBuilt || !node.__apexState || !catalogCache) return [];
+  const work = [];
+  for (const section of node.__apexState.sections) {
+    const status = sectionSyncStatus(node, section.id);
+    if (!status.config.enabled || !status.actionable.length) continue;
+    work.push({
+      section,
+      sectionId: section.id,
+      sectionName: section.name,
+      names: [...status.actionable],
+    });
+  }
+  return work;
+}
+
+
+function pendingSectionSyncSummary(node) {
+  const work = pendingSectionSyncWork(node);
+  return {
+    work,
+    sections: work.length,
+    count: work.reduce((total, item) => total + item.names.length, 0),
+  };
+}
+
+
+async function performSyncAllSections(node) {
+  if (!node?.__apexBuilt || !node.__apexState || !catalogCache) return [];
+  const { work, sections, count } = pendingSectionSyncSummary(node);
+  if (!count) {
+    setStatus(node, "All linked sections are up to date.");
+    return [];
+  }
+
+  const stateRevision = node.__apexFolderSyncRevision || 0;
+  const activeCatalogRevision = catalogRevision;
+  const uniqueNames = [...new Set(work.flatMap((item) => item.names))];
+  setStatus(
+    node,
+    `Sync all: verifying ${uniqueNames.length} LoRA${uniqueNames.length === 1 ? "" : "s"}â€¦`,
+  );
+  const resolved = await resolveSectionSyncNames(
+    uniqueNames,
+    (completed, total) => {
+      if (
+        !node.__apexBuilt
+        || (node.__apexFolderSyncRevision || 0) !== stateRevision
+        || catalogRevision !== activeCatalogRevision
+      ) return false;
+      setStatus(node, `Sync all: verifying LoRAs ${completed}/${total}â€¦`);
+      return true;
+    },
+  );
+  if (
+    !node.__apexBuilt
+    || (node.__apexFolderSyncRevision || 0) !== stateRevision
+    || catalogRevision !== activeCatalogRevision
+  ) {
+    setStatus(
+      node,
+      "Sync all stopped because the LoRA catalog or section setup changed. Try again.",
+      true,
+    );
+    return [];
+  }
+
+  const entriesByName = new Map(
+    (resolved.entries || []).map((entry) => [entry.name, entry]),
+  );
+  const errorsByName = new Map(
+    (resolved.errors || [])
+      .filter((entry) => typeof entry?.name === "string")
+      .map((entry) => [entry.name, entry]),
+  );
+  const results = [];
+  for (const item of work) {
+    if (sectionById(node, item.sectionId) !== item.section) continue;
+    const sectionResolved = {
+      entries: item.names.map((name) => entriesByName.get(name)).filter(Boolean),
+      errors: item.names.map((name) => errorsByName.get(name)).filter(Boolean),
+    };
+    const result = applySectionSyncResolution(
+      node,
+      item.sectionId,
+      item.names,
+      sectionResolved,
+      catalogCache.loras,
+      false,
+      false,
+    );
+    if (!result.aborted) results.push(result);
+  }
+
+  // Serialize and render once after all sections have been processed. This
+  // keeps the global action responsive even when many sections are linked.
+  commit(node, {
+    fullPresetDirty: true,
+    folderSyncDirty: true,
+    render: false,
+  });
+
+  const added = results.reduce((total, result) => total + result.added, 0);
+  const renamed = results.reduce((total, result) => total + result.renamed, 0);
+  const failed = results.reduce((total, result) => total + result.failed, 0);
+  const affectedSections = results.length || sections;
+  const parts = [
+    added ? `${added} added` : "",
+    renamed ? `${renamed} renamed` : "",
+    failed ? `${failed} failed` : "",
+  ].filter(Boolean);
+  const detail = `${parts.join(", ") || "no changes"} across ${affectedSections} section${affectedSections === 1 ? "" : "s"}`;
+  setStatus(node, `Folder sync: ${detail}.`, failed > 0);
+  showNativeToast({
+    severity: failed ? (added || renamed ? "warn" : "error") : "success",
+    summary: failed ? "Apex Sync All completed with issues" : "Apex Sync All",
+    detail: `${added} LoRA${added === 1 ? "" : "s"} added as disabled row${added === 1 ? "" : "s"}${renamed ? `; ${renamed} renamed file${renamed === 1 ? "" : "s"} recovered` : ""}${failed ? `; ${failed} could not be verified` : ""}.`,
+    life: failed ? 10000 : 8000,
+  });
+  openPopover?.refresh?.();
+  return results;
+}
+
+
+function queueSyncAllSections(node) {
+  if (!node?.__apexBuilt || node.__apexFolderSyncAllBusy) {
+    return Promise.resolve([]);
+  }
+  node.__apexFolderSyncAllBusy = true;
+  renderNode(node);
+  const run = autoSyncPassQueue
+    .catch(() => {})
+    .then(() => performSyncAllSections(node));
+  autoSyncPassQueue = run.catch((error) => {
+    console.error("[Apex LoRA Loader] Sync all failed.", error);
+  });
+  return run.finally(() => {
+    node.__apexFolderSyncAllBusy = false;
+    if (node.__apexBuilt) renderNode(node);
+  });
 }
 
 
@@ -2009,10 +2538,15 @@ async function showSectionFolderSync(node, anchor, sectionId) {
       const dirty = !sameSectionSyncConfig(draft, live);
       const previousFolderList = body.querySelector(".apex-folder-sync-folders");
       if (previousFolderList) folderScrollTop = previousFolderList.scrollTop;
+      if (openToolbarInfoTooltip?.anchor && body.contains(openToolbarInfoTooltip.anchor)) {
+        closeToolbarInfoTooltip();
+      }
       body.replaceChildren();
 
       const summary = document.createElement("div");
       summary.className = "apex-folder-sync-summary";
+      summary.tabIndex = 0;
+      summary.setAttribute("aria-label", `Folder Sync details for ${section.name || "this section"}`);
       const summaryText = document.createElement("div");
       summaryText.className = "apex-folder-sync-summary-copy";
       const summaryTitle = document.createElement("strong");
@@ -2027,26 +2561,15 @@ async function showSectionFolderSync(node, anchor, sectionId) {
       summaryDetail.textContent = live.enabled
         ? `${linkedRuleCount} linked · ${excludedRuleCount} excluded · ${status.actionable.length} pending${live.auto_sync ? " · auto" : ""}`
         : `${linkedRuleCount} linked rule${linkedRuleCount === 1 ? "" : "s"} retained while paused`;
-      summaryDetail.title = [
-        live.include_folders.length
-          ? `Linked: ${live.include_folders.map((folder) => folder || "(LoRA root)").join(", ")}`
-          : "No linked folders",
-        live.include_direct.length
-          ? `Direct only: ${live.include_direct.map((folder) => folder || "(LoRA root)").join(", ")}`
-          : "",
-        live.exclude_folders.length
-          ? `Excluded: ${live.exclude_folders.map((folder) => folder || "(LoRA root)").join(", ")}`
-          : "",
-        live.exclude_direct.length
-          ? `Direct files excluded: ${live.exclude_direct.map((folder) => folder || "(LoRA root)").join(", ")}`
-          : "",
-      ].filter(Boolean).join("\n");
       summaryText.append(summaryTitle, summaryDetail);
       const summaryCount = document.createElement("span");
       summaryCount.className = `apex-folder-sync-count${status.actionable.length ? " active" : ""}`;
       summaryCount.textContent = String(status.actionable.length);
-      summaryCount.title = "LoRAs ready to synchronize";
       summary.append(summaryText, summaryCount);
+      attachDynamicInfoTooltip(
+        summary,
+        (anchor) => showFolderSyncInfoTooltip(anchor, node, sectionId),
+      );
       body.appendChild(summary);
 
       const modeLabel = document.createElement("span");
@@ -2477,6 +3000,22 @@ function showNodeSettings(node, anchor) {
   const settings = normalizeSettings(node.__apexState.settings);
   const fields = document.createElement("div");
   fields.className = "apex-settings-list";
+  const settingGroup = (title, className) => {
+    const group = document.createElement("section");
+    group.className = `apex-settings-group ${className}`;
+    const heading = document.createElement("div");
+    heading.className = "apex-settings-group-title";
+    heading.textContent = title;
+    const body = document.createElement("div");
+    body.className = "apex-settings-group-body";
+    group.append(heading, body);
+    fields.appendChild(group);
+    return body;
+  };
+  const displaySettings = settingGroup("Display", "display");
+  const layoutSettings = settingGroup("Layout", "layout");
+  const interactionSettings = settingGroup("Interaction", "interaction");
+  const runSettings = settingGroup("Run on change", "run-on-change");
 
   const toggle = (text, checked, title = "") => {
     const label = document.createElement("label");
@@ -2488,18 +3027,41 @@ function showNodeSettings(node, anchor) {
     input.type = "checkbox";
     input.checked = checked;
     label.append(name, input);
-    fields.appendChild(label);
+    displaySettings.appendChild(label);
     return input;
   };
 
   const showSafetensors = toggle("Show .safetensors", settings.show_safetensors);
   const showFolderPaths = toggle("Show folder paths", settings.show_folder_paths);
   const showTriggerButton = toggle("Show trigger-word button", settings.show_trigger_button);
-  const showAllEnabledLoras = toggle(
-    "List every enabled LoRA",
-    settings.show_all_enabled_loras,
-    `List every enabled LoRA on the node instead of the first ${DEFAULT_PREVIEW_ROW_LIMIT}. The list scrolls, so resize the node to see more at once.`,
-  );
+  const previewLimitRow = document.createElement("label");
+  previewLimitRow.className = "apex-setting-row";
+  const previewLimitLabel = document.createElement("span");
+  previewLimitLabel.textContent = "Enabled LoRAs shown";
+  const previewLimit = document.createElement("input");
+  previewLimit.className = "apex-setting-number";
+  previewLimit.type = "number";
+  previewLimit.min = String(PREVIEW_LORA_LIMIT_MIN);
+  previewLimit.max = String(PREVIEW_LORA_LIMIT_MAX);
+  previewLimit.step = "1";
+  previewLimit.value = String(settings.preview_lora_limit);
+  previewLimit.title = `Number of enabled LoRAs listed on the compact node (${PREVIEW_LORA_LIMIT_MIN}–${PREVIEW_LORA_LIMIT_MAX}); zero or a negative value selects ${PREVIEW_LORA_LIMIT_MAX}`;
+  previewLimitRow.append(previewLimitLabel, previewLimit);
+  displaySettings.appendChild(previewLimitRow);
+  const sectionWidthRow = document.createElement("label");
+  sectionWidthRow.className = "apex-setting-row";
+  const sectionWidthLabel = document.createElement("span");
+  sectionWidthLabel.textContent = "Maximum column width (px)";
+  const sectionMaxWidth = document.createElement("input");
+  sectionMaxWidth.className = "apex-setting-number";
+  sectionMaxWidth.type = "number";
+  sectionMaxWidth.min = String(SECTION_MAX_WIDTH_MIN);
+  sectionMaxWidth.max = String(SECTION_MAX_WIDTH_MAX);
+  sectionMaxWidth.step = "1";
+  sectionMaxWidth.value = String(settings.section_max_width);
+  sectionMaxWidth.title = `Maximum width of each editor section column (${SECTION_MAX_WIDTH_MIN}–${SECTION_MAX_WIDTH_MAX}px)`;
+  sectionWidthRow.append(sectionWidthLabel, sectionMaxWidth);
+  layoutSettings.appendChild(sectionWidthRow);
   const stepRow = document.createElement("label");
   stepRow.className = "apex-setting-row";
   const stepLabel = document.createElement("span");
@@ -2513,7 +3075,7 @@ function showNodeSettings(node, anchor) {
   dragStep.value = String(settings.strength_drag_step);
   dragStep.title = `Exact strength change per ${STRENGTH_DRAG_PIXELS_PER_TICK} horizontal pixels`;
   stepRow.append(stepLabel, dragStep);
-  fields.appendChild(stepRow);
+  interactionSettings.appendChild(stepRow);
   const delayRow = document.createElement("label");
   delayRow.className = "apex-setting-row";
   const delayLabel = document.createElement("span");
@@ -2527,7 +3089,7 @@ function showNodeSettings(node, anchor) {
   autoQueueDelay.value = String(settings.run_on_change_delay_ms);
   autoQueueDelay.title = "Wait after a committed LoRA change before queueing; 0 queues immediately";
   delayRow.append(delayLabel, autoQueueDelay);
-  fields.appendChild(delayRow);
+  runSettings.appendChild(delayRow);
   const scaleRow = document.createElement("label");
   scaleRow.className = "apex-setting-row";
   const scaleLabel = document.createElement("span");
@@ -2541,7 +3103,7 @@ function showNodeSettings(node, anchor) {
   overlayScale.value = String(Math.round(settings.overlay_scale * 100));
   overlayScale.title = "Scale the complete fixed editor and its popups";
   scaleRow.append(scaleLabel, overlayScale);
-  fields.appendChild(scaleRow);
+  layoutSettings.appendChild(scaleRow);
 
   const actions = document.createElement("div");
   actions.className = "apex-popover-actions";
@@ -2576,17 +3138,20 @@ function showNodeSettings(node, anchor) {
   const renderMetadata = () => {
     savedSummary.textContent = `Saved LoRA data (${metadataEntries.length})`;
     clearAll.disabled = metadataEntries.length === 0;
+    if (openToolbarInfoTooltip?.anchor && savedEntries.contains(openToolbarInfoTooltip.anchor)) {
+      closeToolbarInfoTooltip();
+    }
     savedEntries.replaceChildren();
     for (const entry of metadataEntries.slice(0, metadataVisible)) {
       const row = document.createElement("div");
       row.className = "apex-saved-data-row";
+      row.tabIndex = 0;
+      row.setAttribute("aria-label", `Saved LoRA data for ${entry.name}`);
       const name = document.createElement("span");
       name.className = "name";
       name.textContent = entry.name;
-      name.title = entry.name;
       const hash = document.createElement("code");
       hash.textContent = entry.sha256.slice(0, 10);
-      hash.title = entry.sha256;
       const trigger = document.createElement("span");
       const triggerMetadata = normalizeTriggerMetadata(entry);
       const savedCount = triggerMetadata.trigger_words.length;
@@ -2595,9 +3160,6 @@ function showNodeSettings(node, anchor) {
       trigger.textContent = savedCount
         ? `${activeCount}/${savedCount} active${activeCount ? `: ${triggerMetadata.active_trigger_words.join(", ")}` : ""}`
         : "No trigger words";
-      trigger.title = savedCount
-        ? `Active (${activeCount}): ${triggerMetadata.active_trigger_words.join(", ") || "None"}\nSaved: ${triggerMetadata.trigger_words.join("\n")}`
-        : "No trigger words saved";
       const remove = iconButton(
         "trash",
         `Delete the saved identity and trigger words for "${entry.name}"`,
@@ -2624,6 +3186,7 @@ function showNodeSettings(node, anchor) {
         }
       });
       row.append(name, hash, remove, trigger);
+      attachDynamicInfoTooltip(row, (anchor) => showSavedDataInfoTooltip(anchor, entry));
       savedEntries.appendChild(row);
     }
     if (metadataEntries.length > metadataVisible) {
@@ -2684,7 +3247,8 @@ function showNodeSettings(node, anchor) {
     showSafetensors.checked = DEFAULT_SETTINGS.show_safetensors;
     showFolderPaths.checked = DEFAULT_SETTINGS.show_folder_paths;
     showTriggerButton.checked = DEFAULT_SETTINGS.show_trigger_button;
-    showAllEnabledLoras.checked = DEFAULT_SETTINGS.show_all_enabled_loras;
+    previewLimit.value = String(DEFAULT_SETTINGS.preview_lora_limit);
+    sectionMaxWidth.value = String(DEFAULT_SETTINGS.section_max_width);
     dragStep.value = String(DEFAULT_SETTINGS.strength_drag_step);
     autoQueueDelay.value = String(DEFAULT_SETTINGS.run_on_change_delay_ms);
     overlayScale.value = String(Math.round(DEFAULT_SETTINGS.overlay_scale * 100));
@@ -2715,7 +3279,8 @@ function showNodeSettings(node, anchor) {
       show_safetensors: showSafetensors.checked,
       show_folder_paths: showFolderPaths.checked,
       show_trigger_button: showTriggerButton.checked,
-      show_all_enabled_loras: showAllEnabledLoras.checked,
+      preview_lora_limit: normalizePreviewLoraLimit(previewLimit.value),
+      section_max_width: normalizeSectionMaxWidth(sectionMaxWidth.value),
       strength_drag_step: step,
       run_on_change_delay_ms: delayMs,
       overlay_scale: scalePercent / 100,
@@ -3455,6 +4020,40 @@ function applySelectedPreset(node, presetId) {
 }
 
 
+function populateToolbarInfo(infoTools, summary) {
+  if (!infoTools) return;
+  infoTools.replaceChildren();
+  infoTools.removeAttribute("title");
+  infoTools.setAttribute("aria-label", previewSummaryTooltip(summary));
+  for (const [value, label, className] of [
+    [
+      summary.sectionCount,
+      summary.sectionCount === 1 ? "section" : "sections",
+      "",
+    ],
+    [
+      summary.totalRows,
+      summary.totalRows === 1 ? "LoRA" : "LoRAs",
+      "",
+    ],
+    [summary.effectiveRows, "active", "active"],
+    [
+      summary.duplicateGroups.length,
+      summary.duplicateGroups.length === 1 ? "duplicate set" : "duplicate sets",
+      "duplicate",
+    ],
+  ]) {
+    if (className === "duplicate" && value === 0) continue;
+    const metric = document.createElement("span");
+    metric.className = `apex-toolbar-metric${className ? ` ${className}` : ""}`;
+    const number = document.createElement("strong");
+    number.textContent = String(value);
+    metric.append(number, ` ${label}`);
+    infoTools.appendChild(metric);
+  }
+}
+
+
 function buildToolbar(node) {
   const toolbar = document.createElement("div");
   toolbar.className = "apex-toolbar";
@@ -3501,32 +4100,46 @@ function buildToolbar(node) {
     }
     await resolveNodeLoras(node, true);
   });
+  const syncSummary = pendingSectionSyncSummary(node);
+  let syncAll = null;
+  if (syncSummary.count) {
+    const sectionLabel = `${syncSummary.sections} linked section${syncSummary.sections === 1 ? "" : "s"}`;
+    syncAll = iconButton(
+      "folderSync",
+      `Sync all ${syncSummary.count} pending LoRA${syncSummary.count === 1 ? "" : "s"} across ${sectionLabel}`,
+      "apex-tool apex-sync-all",
+      node.__apexFolderSyncAllBusy ? "Syncing" : "Sync all",
+    );
+    syncAll.removeAttribute("title");
+    syncAll.disabled = node.__apexFolderSyncAllBusy;
+    const badge = document.createElement("span");
+    badge.className = "apex-sync-all-count";
+    badge.textContent = syncSummary.count > 99 ? "99+" : String(syncSummary.count);
+    syncAll.appendChild(badge);
+    syncAll.addEventListener("click", () => {
+      queueSyncAllSections(node).catch((error) => {
+        setStatus(node, error?.message || "Sync all failed.", true);
+      });
+    });
+    attachDynamicInfoTooltip(
+      syncAll,
+      (anchor) => showSyncAllInfoTooltip(anchor, node),
+    );
+  }
   const settings = iconButton("settings", "Configure this Apex LoRA Loader", "apex-tool apex-tool-divider");
   settings.addEventListener("click", () => showNodeSettings(node, settings));
   const presetTools = document.createElement("div");
   presetTools.className = "apex-toolbar-island apex-toolbar-presets";
   presetTools.append(presetMenu, save);
-  const rows = allRows(node.__apexState);
-  const enabledRows = rows.filter((row) => row.enabled).length;
-  const sectionCount = node.__apexState.sections.length;
+  const summary = previewSummary(node.__apexState);
   const infoTools = document.createElement("div");
   infoTools.className = "apex-toolbar-island apex-toolbar-info";
-  infoTools.title = `${sectionCount} ${sectionCount === 1 ? "section" : "sections"}, ${rows.length} ${rows.length === 1 ? "LoRA" : "LoRAs"}, ${enabledRows} active`;
-  infoTools.setAttribute("aria-label", infoTools.title);
-  for (const [value, label, className] of [
-    [sectionCount, sectionCount === 1 ? "section" : "sections", ""],
-    [rows.length, rows.length === 1 ? "LoRA" : "LoRAs", ""],
-    [enabledRows, "active", "active"],
-  ]) {
-    const metric = document.createElement("span");
-    metric.className = `apex-toolbar-metric${className ? ` ${className}` : ""}`;
-    const number = document.createElement("strong");
-    number.textContent = String(value);
-    metric.append(number, ` ${label}`);
-    infoTools.appendChild(metric);
-  }
+  infoTools.tabIndex = 0;
+  populateToolbarInfo(infoTools, summary);
+  attachToolbarInfoTooltip(infoTools, node);
   const utilityTools = document.createElement("div");
   utilityTools.className = "apex-toolbar-island apex-toolbar-utilities";
+  if (syncAll) utilityTools.appendChild(syncAll);
   utilityTools.append(folders, refresh, settings);
   toolbar.append(presetTools, infoTools, utilityTools);
   return toolbar;
@@ -3635,6 +4248,7 @@ function setRowZero(node, row, muted, autoQueue = false) {
   if (!setMuted(row, muted)) return false;
   commit(node, { presetDirty: true, render: false });
   syncRowZeroElements(node, row);
+  syncActivitySummaries(node);
   if (autoQueue) notifyEditorAutoQueue(node);
   return true;
 }
@@ -3848,7 +4462,7 @@ function buildRow(node, section, row) {
   element.dataset.apexRowId = row.id;
   const showTriggerButton = node.__apexState.settings.show_trigger_button;
   element.className = `apex-row${showTriggerButton ? " with-trigger" : ""}${row.enabled ? "" : " disabled"}${isMuted(row) ? " muted" : ""}${row.error ? " error" : ""}`;
-  element.title = row.error || row.name;
+  if (!row.error) element.title = row.name;
   const handle = document.createElement("span");
   handle.className = "apex-drag apex-row-drag";
   handle.textContent = "⠿";
@@ -3889,7 +4503,16 @@ function buildRow(node, section, row) {
     name.appendChild(stateIcon);
   }
   name.appendChild(loraNameContent(row.name, node.__apexState.settings));
+  name.setAttribute("aria-label", row.error
+    ? `LoRA issue for ${row.name}; hover or focus for details`
+    : `Choose a replacement for ${row.name}`);
   name.addEventListener("click", () => showLoraChooser(node, name, section.id, row.id));
+  if (row.error) {
+    attachDynamicInfoTooltip(
+      name,
+      (anchor) => showLoraErrorInfoTooltip(anchor, node, section, row),
+    );
+  }
 
   const strength = createStrengthInput(node, row, "", true);
 
@@ -3920,8 +4543,7 @@ function buildRow(node, section, row) {
 
   const remove = iconButton("x", "Remove this LoRA", "apex-row-remove");
   remove.addEventListener("click", () => {
-    recordSectionSyncRemoval(section, row);
-    section.loras.splice(section.loras.indexOf(row), 1);
+    if (!removeCurrentRow(node, row.id)) return;
     commit(node, { presetDirty: true, folderSyncDirty: true });
   });
 
@@ -4039,6 +4661,17 @@ function buildSection(node, section) {
     badgeGroup.appendChild(badge);
   }
   if (badgeGroup.childElementCount) add.appendChild(badgeGroup);
+  if (syncStatus.config.enabled || syncStatus.actionable.length || autoSyncAdded) {
+    add.removeAttribute("title");
+    add.setAttribute(
+      "aria-label",
+      `${addTitle}. Hover or focus for Folder Sync details.`,
+    );
+    attachDynamicInfoTooltip(
+      add,
+      (anchor) => showFolderSyncInfoTooltip(anchor, node, section.id),
+    );
+  }
   add.addEventListener("click", () => {
     if (autoSyncAdded) {
       node.__apexFolderAutoSyncAdded?.delete(section.id);
@@ -4230,7 +4863,7 @@ function layoutSections(node) {
 
   const styles = getComputedStyle(root);
   const minimum = parseFloat(styles.getPropertyValue("--apex-section-min-width")) || 320;
-  const maximum = parseFloat(styles.getPropertyValue("--apex-section-max-width")) || 646;
+  const maximum = parseFloat(styles.getPropertyValue("--apex-section-max-width")) || 648;
   const gap = parseFloat(styles.getPropertyValue("--apex-section-grid-gap")) || 6;
   const width = content.clientWidth || Math.max(1, (node.size?.[0] || DEFAULT_SIZE[0]) - 12);
   const columnCount = responsiveColumnCount(width, node.__apexState.sections.length, minimum, gap);
@@ -4320,32 +4953,12 @@ function installWidgetVisibilityLifecycle(node, domWidget) {
 }
 
 
-function renderPreview(node, summary = previewSummary(node.__apexState)) {
-  const root = node.__apexRoot;
-  if (!root || !node.__apexState || node.__apexUiSuspended) return;
-  if (openTriggerPreview?.anchor && root.contains(openTriggerPreview.anchor)) {
-    closeTriggerPreview();
-  }
-  root.replaceChildren();
-
-  const toolbar = document.createElement("div");
-  toolbar.className = "apex-preview-toolbar";
-  const open = document.createElement("button");
-  open.type = "button";
-  open.className = "apex-preview-open";
-  open.title = "Open the full Apex LoRA editor";
-  open.setAttribute("aria-label", "Open the full Apex LoRA editor");
-  open.appendChild(svgIcon("externalLink"));
-  open.addEventListener("click", () => editorController.open(node));
-  node.__apexOpenButton = open;
-
-  const metrics = document.createElement("div");
-  metrics.className = `apex-preview-summary${summary.enabledRows ? " active" : ""}`;
-  metrics.title = [
-    `${summary.sectionCount} section${summary.sectionCount === 1 ? "" : "s"}`,
-    `${summary.enabledRows} enabled LoRA${summary.enabledRows === 1 ? "" : "s"}`,
-    `${summary.totalRows} total LoRA${summary.totalRows === 1 ? "" : "s"}`,
-  ].join(", ");
+function populatePreviewSummary(metrics, summary) {
+  if (!metrics) return;
+  metrics.replaceChildren();
+  metrics.className = `apex-preview-summary${summary.effectiveRows ? " active" : ""}${summary.duplicateGroups.length ? " duplicates" : ""}`;
+  metrics.removeAttribute("title");
+  metrics.setAttribute("aria-label", previewSummaryTooltip(summary));
   const appendMetric = (value, label, className = "") => {
     if (metrics.childElementCount) {
       const separator = document.createElement("span");
@@ -4363,11 +4976,49 @@ function renderPreview(node, summary = previewSummary(node.__apexState)) {
     metrics.appendChild(metric);
   };
   appendMetric(summary.sectionCount, summary.sectionCount === 1 ? "section" : "sections");
-  appendMetric(summary.enabledRows, "enabled", "enabled");
+  appendMetric(summary.effectiveRows, "active", "active");
+  if (summary.mutedRows) appendMetric(summary.mutedRows, "muted", "muted");
   appendMetric(summary.totalRows, "LoRAs");
   if (summary.errorRows) {
     appendMetric(summary.errorRows, summary.errorRows === 1 ? "issue" : "issues", "error");
   }
+  if (summary.duplicateGroups.length) {
+    appendMetric(
+      summary.duplicateGroups.length,
+      summary.duplicateGroups.length === 1 ? "duplicate" : "duplicates",
+      "duplicate",
+    );
+  }
+}
+
+
+function renderPreview(node, summary = previewSummary(node.__apexState)) {
+  const root = node.__apexRoot;
+  if (!root || !node.__apexState || node.__apexUiSuspended) return;
+  if (openTriggerPreview?.anchor && root.contains(openTriggerPreview.anchor)) {
+    closeTriggerPreview();
+  }
+  if (openToolbarInfoTooltip?.anchor && root.contains(openToolbarInfoTooltip.anchor)) {
+    closeToolbarInfoTooltip();
+  }
+  root.replaceChildren();
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "apex-preview-toolbar";
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "apex-preview-open";
+  open.title = "Open the full Apex LoRA editor";
+  open.setAttribute("aria-label", "Open the full Apex LoRA editor");
+  open.appendChild(svgIcon("externalLink"));
+  open.addEventListener("click", () => editorController.open(node));
+  node.__apexOpenButton = open;
+
+  const metrics = document.createElement("div");
+  metrics.tabIndex = 0;
+  populatePreviewSummary(metrics, summary);
+  attachToolbarInfoTooltip(metrics, node);
+  node.__apexPreviewSummaryElement = metrics;
   toolbar.append(metrics, open);
   root.appendChild(toolbar);
 
@@ -4399,9 +5050,20 @@ function renderPreview(node, summary = previewSummary(node.__apexState)) {
       const name = document.createElement("span");
       name.className = "apex-preview-name";
       name.textContent = previewDisplayName(item.name, node.__apexState.settings);
-      name.title = item.error || `${item.sectionName} / ${item.name}`;
+      if (!item.error) name.title = `${item.sectionName} / ${item.name}`;
       main.append(section, name);
       const sourceRow = rowById(node, item.id);
+      if (item.error && sourceRow) {
+        const sourceSection = node.__apexState.sections.find(
+          (candidate) => candidate.loras.includes(sourceRow),
+        );
+        name.tabIndex = 0;
+        name.setAttribute("aria-label", `LoRA issue for ${item.name}; hover or focus for details`);
+        attachDynamicInfoTooltip(
+          name,
+          (anchor) => showLoraErrorInfoTooltip(anchor, node, sourceSection, sourceRow),
+        );
+      }
       // Both buttons live in a fixed cell of their own instead of trailing the
       // name, so their position never depends on the LoRA name or row width.
       const actions = document.createElement("div");
@@ -4445,7 +5107,7 @@ function renderPreview(node, summary = previewSummary(node.__apexState)) {
       const more = document.createElement("div");
       more.className = "apex-preview-more";
       more.textContent = `+${summary.overflow} more enabled`;
-      more.title = `Only the first ${DEFAULT_PREVIEW_ROW_LIMIT} enabled LoRAs are listed. Enable "List every enabled LoRA" in the editor's node settings to show all of them.`;
+      more.title = `Only the first ${summary.rows.length} enabled LoRAs are listed. Adjust "Enabled LoRAs shown" in the editor's node settings to change this limit.`;
       list.appendChild(more);
     }
   }
@@ -4460,15 +5122,57 @@ function renderPreview(node, summary = previewSummary(node.__apexState)) {
 }
 
 
+function syncEditorPersistentStatus(node, summary) {
+  const view = editorView;
+  if (!view || view.node !== node || !view.statusElement) return;
+  const duplicateCount = summary.duplicateGroups.length;
+  view.statusElement.dataset.idleLabel = duplicateCount
+    ? `${duplicateCount} duplicate LoRA ${duplicateCount === 1 ? "set" : "sets"} loaded`
+    : "Ready";
+  view.statusElement.dataset.idleWarning = duplicateCount ? "true" : "false";
+  updateStatusElement(
+    view.statusElement,
+    node.__apexStatus?.message || "",
+    node.__apexStatus?.error === true,
+  );
+  if (duplicateCount && !node.__apexStatus?.message) {
+    view.statusElement.title = previewSummaryTooltip(summary);
+  }
+}
+
+
+function syncActivitySummaries(node) {
+  if (!node?.__apexState) return;
+  const summary = previewSummary(node.__apexState);
+  if (node.__apexPreviewSummaryElement?.isConnected) {
+    populatePreviewSummary(node.__apexPreviewSummaryElement, summary);
+  }
+  if (editorView?.node === node) {
+    populateToolbarInfo(
+      editorView.controls?.querySelector(".apex-toolbar-info"),
+      summary,
+    );
+    syncEditorPersistentStatus(node, summary);
+  }
+}
+
+
 function renderEditor(node) {
   const view = editorView;
   if (!view || view.node !== node || !view.root?.isConnected || !node.__apexState) return;
   const settings = normalizeSettings(node.__apexState.settings);
+  view.root.style.setProperty(
+    "--apex-section-max-width",
+    `${settings.section_max_width}px`,
+  );
+  const summary = previewSummary(node.__apexState);
+  syncEditorPersistentStatus(node, summary);
   if (view.autoQueue && view.autoQueue.state.enabled !== settings.run_on_change_enabled) {
     view.autoQueue.setEnabled(settings.run_on_change_enabled);
   }
   syncEditorStage(node);
   view.pendingScrollTop = view.stack?.scrollTop ?? view.pendingScrollTop ?? 0;
+  closeToolbarInfoTooltip();
   view.controls.replaceChildren(buildToolbar(node));
   const root = view.root;
   root.replaceChildren();
@@ -4530,6 +5234,7 @@ function closeNodeEditor(node) {
 
 function mountNodeEditor(node) {
   closeTriggerPreview();
+  closeToolbarInfoTooltip();
   closeOpenPopover();
   const overlay = document.createElement("div");
   overlay.className = "apex-editor-overlay";
@@ -4711,6 +5416,7 @@ function unmountNodeEditor(node) {
     clearDragFeedback();
   }
   closeOpenPopover();
+  closeToolbarInfoTooltip();
   view.overlay.remove();
   document.body.classList.remove("apex-editor-active");
   editorView = null;
@@ -4740,6 +5446,7 @@ function buildNodeUI(node) {
   node.__apexFolderSyncCache = null;
   node.__apexFolderSyncErrors = new Map();
   node.__apexFolderAutoSyncAdded = new Map();
+  node.__apexFolderSyncAllBusy = false;
 
   const root = document.createElement("div");
   root.className = "apex-lora-preview";
@@ -4810,7 +5517,25 @@ function handleRuntimeResolution(event) {
 }
 
 
+function handleExecutionReport(event) {
+  logExecutionReport(event.detail || {});
+}
+
+
+function handleExecutionCached(event) {
+  for (const nodeId of event.detail?.nodes || []) {
+    const node = app.graph?._nodes_by_id?.[nodeId]
+      || app.graph?._nodes?.find((item) => String(item.id) === String(nodeId));
+    if (node?.comfyClass === NODE_CLASS || node?.type === NODE_CLASS) {
+      logCachedExecution(nodeId);
+    }
+  }
+}
+
+
 api.addEventListener("apex-lora-loader/resolved", handleRuntimeResolution);
+api.addEventListener("apex-lora-loader/execution-report", handleExecutionReport);
+api.addEventListener("execution_cached", handleExecutionCached);
 window.addEventListener(PRESET_JOBS_SUBMISSION_EVENT, handlePresetJobsSubmissionState);
 
 app.registerExtension({
@@ -4867,6 +5592,7 @@ app.registerExtension({
       this.__apexFolderSyncCache = null;
       this.__apexFolderSyncErrors = null;
       this.__apexFolderAutoSyncAdded = null;
+      this.__apexFolderSyncAllBusy = false;
       this.__apexFolderSyncStartupGeneration =
         (this.__apexFolderSyncStartupGeneration || 0) + 1;
       startupSectionSyncPending.delete(this);

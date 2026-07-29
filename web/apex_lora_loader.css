@@ -27,7 +27,7 @@
 }
 
 .apex-lora-root {
-  /* Keep max close to (2 * min) + gap so responsive column breaks stay seamless. */
+  /* The default stays close to (2 * min) + gap; node settings may override it. */
   --apex-section-min-width: 320px;
   --apex-section-max-width: 648px;
   --apex-section-grid-gap: 8px;
@@ -201,6 +201,8 @@
   font: 600 10px/1 var(--apex-code-font);
 }
 .apex-toolbar-metric.active strong { color: var(--apex-primary); }
+.apex-toolbar-metric.duplicate,
+.apex-toolbar-metric.duplicate strong { color: var(--apex-mute); }
 .apex-toolbar-utilities {
   flex: none;
 }
@@ -238,6 +240,36 @@
 .apex-tool:hover {
   background: rgba(255, 255, 255, .06) !important;
   color: var(--apex-primary);
+}
+.apex-sync-all {
+  gap: 5px;
+  padding-inline: 8px;
+  border-color: rgba(68, 166, 173, .26) !important;
+  background: rgba(68, 166, 173, .11) !important;
+  color: var(--apex-primary) !important;
+  font-weight: 650;
+}
+.apex-sync-all:hover {
+  border-color: rgba(119, 213, 220, .42) !important;
+  background: rgba(68, 166, 173, .2) !important;
+  color: var(--apex-primary-bright) !important;
+}
+.apex-sync-all:disabled {
+  cursor: wait;
+  opacity: .56;
+}
+.apex-sync-all-count {
+  display: inline-flex;
+  min-width: 16px;
+  height: 16px;
+  padding-inline: 4px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(119, 213, 220, .24);
+  border-radius: 5px;
+  background: rgba(7, 14, 18, .42);
+  color: var(--apex-primary-bright);
+  font: 700 9px/1 var(--apex-code-font);
 }
 .apex-tool-divider {
   position: relative;
@@ -1334,6 +1366,10 @@
   border-radius: 7px;
   background: rgba(68, 166, 173, .055);
 }
+.apex-folder-sync-summary:focus-visible {
+  outline: 1px solid rgba(119, 213, 220, .58);
+  outline-offset: 1px;
+}
 .apex-folder-sync-summary-copy {
   display: grid;
   min-width: 0;
@@ -1774,7 +1810,39 @@
   .apex-folder-sync-config-buttons { justify-content: flex-end; }
 }
 
-.apex-settings-list { display: grid; gap: 2px; }
+.apex-settings-list {
+  display: flex;
+  gap: 8px;
+  flex-direction: column;
+}
+.apex-settings-group {
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, .075);
+  border-radius: 7px;
+  background: rgba(15, 20, 26, .28);
+}
+.apex-settings-group-title {
+  min-height: 22px;
+  padding: 6px 8px 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, .07);
+  background: rgba(255, 255, 255, .025);
+  color: var(--apex-text-dim);
+  font: 600 9px/12px var(--apex-heading-font);
+  letter-spacing: .075em;
+  text-transform: uppercase;
+}
+.apex-settings-group-body {
+  display: grid;
+  padding: 2px 4px;
+}
+.apex-settings-group.run-on-change {
+  border-color: rgba(119, 213, 220, .14);
+  background: rgba(68, 166, 173, .035);
+}
+.apex-settings-group.run-on-change .apex-settings-group-title {
+  border-bottom-color: rgba(119, 213, 220, .1);
+  color: rgba(119, 213, 220, .72);
+}
 .apex-setting-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1810,6 +1878,11 @@
   gap: 2px 7px;
   align-items: center;
   border-bottom: 1px solid var(--apex-border);
+}
+.apex-saved-data-row:focus-visible {
+  outline: 1px solid rgba(119, 213, 220, .48);
+  outline-offset: -1px;
+  background: rgba(68, 166, 173, .055);
 }
 .apex-saved-data-row:last-child { border-bottom: 0; }
 .apex-saved-data-row .name,
