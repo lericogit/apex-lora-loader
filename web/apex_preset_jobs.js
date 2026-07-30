@@ -396,6 +396,10 @@ function attachRuntimePreview(anchor, node, context) {
 }
 
 function createPopover(anchor) {
+  if (openPopover?.anchor === anchor) {
+    openPopover.close();
+    return null;
+  }
   closePopover();
   const panel = document.createElement("div");
   panel.className = "apex-jobs-popover";
@@ -412,7 +416,7 @@ function createPopover(anchor) {
     if (openPopover?.panel === panel) openPopover = null;
   };
   queueMicrotask(() => document.addEventListener("pointerdown", onPointerDown, true));
-  openPopover = { panel, close };
+  openPopover = { panel, close, anchor };
   return { panel, close };
 }
 
@@ -732,7 +736,9 @@ function installQueueCallbacks(node) {
 }
 
 async function showPresetPicker(node, anchor) {
-  const { panel, close } = createPopover(anchor);
+  const popover = createPopover(anchor);
+  if (!popover) return;
+  const { panel, close } = popover;
   panel.classList.add("apex-jobs-preset-picker");
   const search = document.createElement("input");
   search.type = "search";

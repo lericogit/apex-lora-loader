@@ -1252,6 +1252,10 @@ function closeOpenPopover() {
 
 
 function createPopover(anchor, title, className = "") {
+  if (openPopover?.anchor === anchor) {
+    openPopover.close();
+    return null;
+  }
   closeOpenPopover();
   const panel = document.createElement("div");
   panel.className = `apex-popover ${className}`.trim();
@@ -1296,7 +1300,7 @@ function createPopover(anchor, title, className = "") {
     if (openPopover?.panel === panel) openPopover = null;
   };
   const outside = (event) => {
-    if (!panel.contains(event.target)) dispose();
+    if (!panel.contains(event.target) && !anchor?.contains?.(event.target)) dispose();
   };
   const keydown = (event) => {
     if (event.key === "Escape") dispose();
@@ -1306,7 +1310,7 @@ function createPopover(anchor, title, className = "") {
     document.addEventListener("pointerdown", outside, true);
     document.addEventListener("keydown", keydown, true);
   }, 0);
-  openPopover = { panel, close: dispose };
+  openPopover = { panel, close: dispose, anchor };
   return { panel, close: dispose };
 }
 
@@ -1498,7 +1502,9 @@ async function showLoraChooser(node, anchor, sectionId, rowId = null) {
     const choices = catalog.loras.filter((name) =>
       matchesFolderFilters(name, node.__apexState.folder_filters),
     );
-    const { panel, close } = createPopover(anchor, rowId ? "Change LoRA" : "Add LoRA");
+    const popover = createPopover(anchor, rowId ? "Change LoRA" : "Add LoRA");
+    if (!popover) return;
+    const { panel, close } = popover;
     const search = document.createElement("input");
     search.className = "apex-search";
     search.type = "search";
@@ -1772,7 +1778,9 @@ async function showFolderChooser(node, anchor) {
       : normalizeNodeFolderFilters(node.__apexState.folder_filters);
     const tree = buildFolderTree(catalog.loras, catalog.folders);
     const expanded = expandedFoldersFromView(tree, node.__apexState.folder_tree_view);
-    const { panel, close } = createPopover(anchor, "LoRA folders");
+    const popover = createPopover(anchor, "LoRA folders");
+    if (!popover) return;
+    const { panel, close } = popover;
     const actions = document.createElement("div");
     actions.className = "apex-popover-actions";
     const all = document.createElement("button");
@@ -2483,11 +2491,13 @@ async function showSectionFolderSync(node, anchor, sectionId) {
       return;
     }
     refreshNodeSectionSyncStatus(node, false);
-    const { panel } = createPopover(
+    const popover = createPopover(
       anchor,
       "Section folder sync",
       "apex-folder-sync-popover",
     );
+    if (!popover) return;
+    const { panel } = popover;
     const body = document.createElement("div");
     body.className = "apex-folder-sync-body";
     panel.appendChild(body);
@@ -2996,7 +3006,9 @@ async function showSectionFolderSync(node, anchor, sectionId) {
 
 
 function showNodeSettings(node, anchor) {
-  const { panel, close } = createPopover(anchor, "Node settings", "apex-settings-popover");
+  const popover = createPopover(anchor, "Node settings", "apex-settings-popover");
+  if (!popover) return;
+  const { panel, close } = popover;
   const settings = normalizeSettings(node.__apexState.settings);
   const fields = document.createElement("div");
   fields.className = "apex-settings-list";
@@ -3342,7 +3354,9 @@ async function showTriggerEditor(node, anchor, rowId) {
     }
     let draft = normalizeTriggerMetadata(row);
     let draftPosition = normalizeTriggerPosition(row.trigger_position);
-    const { panel, close } = createPopover(anchor, "Trigger words", "apex-trigger-popover");
+    const popover = createPopover(anchor, "Trigger words", "apex-trigger-popover");
+    if (!popover) return;
+    const { panel, close } = popover;
     const identity = document.createElement("div");
     identity.className = "apex-trigger-identity";
     const name = document.createElement("span");
@@ -3672,7 +3686,9 @@ function showSavePreset(node, anchor) {
     (preset) => preset.id === node.__apexState.active_preset_id,
   );
   let selectedType = presetType(current);
-  const { panel, close } = createPopover(anchor, "Save preset", "apex-preset-save");
+  const popover = createPopover(anchor, "Save preset", "apex-preset-save");
+  if (!popover) return;
+  const { panel, close } = popover;
   const nameLabel = document.createElement("label");
   nameLabel.className = "apex-preset-name-field";
   const nameCaption = document.createElement("span");
@@ -3933,7 +3949,9 @@ function buildPresetMenuRow(node, preset, close) {
 
 
 function showPresetDropdown(node, anchor) {
-  const { panel, close } = createPopover(anchor, "Presets", "apex-preset-dropdown");
+  const popover = createPopover(anchor, "Presets", "apex-preset-dropdown");
+  if (!popover) return;
+  const { panel, close } = popover;
   const list = document.createElement("div");
   list.className = "apex-preset-menu";
   const selectedPreset = node.__apexPresets?.some(
