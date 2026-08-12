@@ -1184,6 +1184,7 @@ function showSavedDataInfoTooltip(anchor, entry) {
     `${metadata.active_trigger_words.length}/${metadata.trigger_words.length} active`,
     metadata.active_trigger_words.length ? "active" : "",
   );
+  tooltip.classList.add("apex-saved-data-info-tooltip");
   appendInfoMetrics(tooltip, "Identity", [
     [String(entry.sha256 || "").slice(0, 12) || "—", "SHA-256 prefix"],
     [formatSavedDataSize(entry.size), "File size"],
@@ -1256,6 +1257,14 @@ function createPopover(anchor, title, className = "") {
     openPopover.close();
     return null;
   }
+  // Capture the trigger position before closing another popover. A launcher
+  // inside that popover is removed from the DOM as part of the close.
+  const rect = anchor?.getBoundingClientRect?.() || {
+    left: window.innerWidth / 2,
+    right: window.innerWidth / 2,
+    top: window.innerHeight / 3,
+    bottom: window.innerHeight / 3,
+  };
   closeOpenPopover();
   const panel = document.createElement("div");
   panel.className = `apex-popover ${className}`.trim();
@@ -1271,12 +1280,6 @@ function createPopover(anchor, title, className = "") {
   const host = editorView?.overlay?.isConnected ? editorView.overlay : document.body;
   host.appendChild(panel);
 
-  const rect = anchor?.getBoundingClientRect?.() || {
-    left: window.innerWidth / 2,
-    right: window.innerWidth / 2,
-    top: window.innerHeight / 3,
-    bottom: window.innerHeight / 3,
-  };
   const position = () => {
     const panelRect = panel.getBoundingClientRect();
     const left = Math.max(8, Math.min(rect.left, window.innerWidth - panelRect.width - 8));
@@ -3005,6 +3008,151 @@ async function showSectionFolderSync(node, anchor, sectionId) {
 }
 
 
+function showSavedLoraData(node, anchor) {
+  const popover = createPopover(
+    anchor,
+    "Saved LoRA data",
+    "apex-saved-data-popover",
+  );
+  if (!popover) return;
+  const { panel } = popover;
+
+  const overview = document.createElement("div");
+  overview.className = "apex-saved-data-overview";
+  const overviewCopy = document.createElement("span");
+  overviewCopy.textContent = "Local identities and trigger words";
+  const overviewCount = document.createElement("strong");
+  overviewCount.textContent = "Loading";
+  overview.append(overviewCopy, overviewCount);
+
+  const savedEntries = document.createElement("div");
+  savedEntries.className = "apex-saved-data-list";
+  savedEntries.textContent = "Loading...";
+  const dangerZone = document.createElement("div");
+  dangerZone.className = "apex-danger-zone";
+  const clearAll = document.createElement("button");
+  clearAll.type = "button";
+  clearAll.className = "apex-danger-button";
+  clearAll.textContent = "Clear all saved LoRA data";
+  clearAll.disabled = true;
+  dangerZone.appendChild(clearAll);
+  panel.append(overview, savedEntries, dangerZone);
+
+  let metadataEntries = [];
+  let metadataVisible = 100;
+  const renderMetadata = () => {
+    overviewCount.textContent = `${metadataEntries.length} saved`;
+    clearAll.disabled = metadataEntries.length === 0;
+    if (openToolbarInfoTooltip?.anchor && savedEntries.contains(openToolbarInfoTooltip.anchor)) {
+      closeToolbarInfoTooltip();
+    }
+    const scrollTop = savedEntries.scrollTop;
+    savedEntries.replaceChildren();
+    for (const entry of metadataEntries.slice(0, metadataVisible)) {
+      const row = document.createElement("div");
+      row.className = "apex-saved-data-row";
+      row.tabIndex = 0;
+      row.setAttribute("aria-label", `Saved LoRA data for ${entry.name}`);
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = entry.name;
+      const hash = document.createElement("code");
+      hash.textContent = entry.sha256.slice(0, 10);
+      const trigger = document.createElement("span");
+      const triggerMetadata = normalizeTriggerMetadata(entry);
+      const savedCount = triggerMetadata.trigger_words.length;
+      const activeCount = triggerMetadata.active_trigger_words.length;
+      trigger.className = `trigger${savedCount ? "" : " empty"}`;
+      trigger.textContent = savedCount
+        ? `${activeCount}/${savedCount} active${activeCount ? `: ${triggerMetadata.active_trigger_words.join(", ")}` : ""}`
+        : "No trigger words";
+      const remove = iconButton(
+        "trash",
+        `Delete the saved identity and trigger words for "${entry.name}"`,
+        "apex-saved-data-delete",
+      );
+      remove.setAttribute("aria-label", `Delete saved LoRA data for ${entry.name}`);
+      remove.addEventListener("click", async () => {
+        remove.disabled = true;
+        try {
+          await fetchJson(`/apex_lora_loader/metadata/${encodeURIComponent(entry.sha256)}`, {
+            method: "DELETE",
+          });
+          metadataEntries = metadataEntries.filter((item) => item.sha256 !== entry.sha256);
+          metadataCache = metadataEntries;
+          clearOpenTriggerMetadata(entry.sha256);
+          renderMetadata();
+          setStatus(
+            node,
+            `Deleted saved data for "${entry.name}" and cleared its triggers from open Apex rows. The LoRA file was not deleted; its identity may be recreated when used again.`,
+          );
+        } catch (error) {
+          remove.disabled = false;
+          setStatus(node, error.message, true);
+        }
+      });
+      row.append(name, hash, remove, trigger);
+      attachDynamicInfoTooltip(row, (rowAnchor) => showSavedDataInfoTooltip(rowAnchor, entry));
+      savedEntries.appendChild(row);
+    }
+    if (metadataEntries.length > metadataVisible) {
+      const remaining = metadataEntries.length - metadataVisible;
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "apex-saved-data-more";
+      more.textContent = `Show more (${remaining} remaining)`;
+      more.addEventListener("click", () => {
+        metadataVisible += 100;
+        renderMetadata();
+      });
+      savedEntries.appendChild(more);
+    }
+    if (!metadataEntries.length) {
+      savedEntries.textContent = "No LoRA identities have been saved yet.";
+    }
+    savedEntries.scrollTop = Math.min(scrollTop, savedEntries.scrollHeight);
+  };
+
+  loadMetadata().then((entries) => {
+    if (!panel.isConnected) return;
+    metadataEntries = entries;
+    renderMetadata();
+  }).catch((error) => {
+    if (!panel.isConnected) return;
+    overviewCount.textContent = "Unavailable";
+    savedEntries.textContent = error.message;
+  });
+
+  clearAll.addEventListener("click", async () => {
+    const count = metadataEntries.length;
+    const noun = count === 1 ? "record" : "records";
+    const confirmed = window.confirm(
+      `Clear all saved LoRA data?\n\nThis deletes ${count} saved LoRA identity ${noun} and every trigger word stored with them. Trigger words will also be cleared from Apex nodes in the currently open workflow.\n\nLoRA files, stack rows, sections, presets, and folder settings are not deleted. Identity records will be recreated as LoRAs are identified again. Deleted trigger words cannot be recovered unless another workflow still contains them; opening that workflow can save them again.\n\nContinue?`,
+    );
+    if (!confirmed) return;
+    clearAll.disabled = true;
+    try {
+      const result = await fetchJson("/apex_lora_loader/metadata", { method: "DELETE" });
+      const deleted = Number.isInteger(result.deleted) ? result.deleted : count;
+      const deletedNoun = deleted === 1 ? "record" : "records";
+      const triggerPronoun = deleted === 1 ? "its" : "their";
+      metadataEntries = [];
+      metadataVisible = 100;
+      metadataCache = [];
+      clearOpenTriggerMetadata();
+      renderMetadata();
+      setStatus(
+        node,
+        `Cleared ${deleted} saved LoRA ${deletedNoun} and ${triggerPronoun} trigger words. LoRA files, presets, and stack rows were not deleted; identity records will rebuild as needed.`,
+      );
+    } catch (error) {
+      clearAll.disabled = false;
+      setStatus(node, error.message, true);
+    }
+  });
+}
+
+
 function showNodeSettings(node, anchor) {
   const popover = createPopover(anchor, "Node settings", "apex-settings-popover");
   if (!popover) return;
@@ -3127,132 +3275,25 @@ function showNodeSettings(node, anchor) {
   apply.textContent = "Apply";
   apply.className = "apex-primary-action";
   actions.append(reset, apply);
-  const savedData = document.createElement("details");
-  savedData.className = "apex-saved-data";
-  const savedSummary = document.createElement("summary");
-  savedSummary.textContent = "Saved LoRA data";
-  const savedEntries = document.createElement("div");
-  savedEntries.className = "apex-saved-data-list";
-  savedEntries.textContent = "Loading...";
-  savedData.append(savedSummary, savedEntries);
-  const dangerZone = document.createElement("div");
-  dangerZone.className = "apex-danger-zone";
-  const clearAll = document.createElement("button");
-  clearAll.type = "button";
-  clearAll.className = "apex-danger-button";
-  clearAll.textContent = "Clear all saved LoRA data";
-  clearAll.disabled = true;
-  dangerZone.appendChild(clearAll);
-  panel.append(fields, actions, savedData, dangerZone);
-
-  let metadataEntries = [];
-  let metadataVisible = 100;
-  const renderMetadata = () => {
-    savedSummary.textContent = `Saved LoRA data (${metadataEntries.length})`;
-    clearAll.disabled = metadataEntries.length === 0;
-    if (openToolbarInfoTooltip?.anchor && savedEntries.contains(openToolbarInfoTooltip.anchor)) {
-      closeToolbarInfoTooltip();
-    }
-    savedEntries.replaceChildren();
-    for (const entry of metadataEntries.slice(0, metadataVisible)) {
-      const row = document.createElement("div");
-      row.className = "apex-saved-data-row";
-      row.tabIndex = 0;
-      row.setAttribute("aria-label", `Saved LoRA data for ${entry.name}`);
-      const name = document.createElement("span");
-      name.className = "name";
-      name.textContent = entry.name;
-      const hash = document.createElement("code");
-      hash.textContent = entry.sha256.slice(0, 10);
-      const trigger = document.createElement("span");
-      const triggerMetadata = normalizeTriggerMetadata(entry);
-      const savedCount = triggerMetadata.trigger_words.length;
-      const activeCount = triggerMetadata.active_trigger_words.length;
-      trigger.className = `trigger${savedCount ? "" : " empty"}`;
-      trigger.textContent = savedCount
-        ? `${activeCount}/${savedCount} active${activeCount ? `: ${triggerMetadata.active_trigger_words.join(", ")}` : ""}`
-        : "No trigger words";
-      const remove = iconButton(
-        "trash",
-        `Delete the saved identity and trigger words for "${entry.name}"`,
-        "apex-saved-data-delete",
-      );
-      remove.setAttribute("aria-label", `Delete saved LoRA data for ${entry.name}`);
-      remove.addEventListener("click", async () => {
-        remove.disabled = true;
-        try {
-          await fetchJson(`/apex_lora_loader/metadata/${encodeURIComponent(entry.sha256)}`, {
-            method: "DELETE",
-          });
-          metadataEntries = metadataEntries.filter((item) => item.sha256 !== entry.sha256);
-          metadataCache = metadataEntries;
-          clearOpenTriggerMetadata(entry.sha256);
-          renderMetadata();
-          setStatus(
-            node,
-            `Deleted saved data for "${entry.name}" and cleared its triggers from open Apex rows. The LoRA file was not deleted; its identity may be recreated when used again.`,
-          );
-        } catch (error) {
-          remove.disabled = false;
-          setStatus(node, error.message, true);
-        }
-      });
-      row.append(name, hash, remove, trigger);
-      attachDynamicInfoTooltip(row, (anchor) => showSavedDataInfoTooltip(anchor, entry));
-      savedEntries.appendChild(row);
-    }
-    if (metadataEntries.length > metadataVisible) {
-      const remaining = metadataEntries.length - metadataVisible;
-      const more = document.createElement("button");
-      more.type = "button";
-      more.className = "apex-saved-data-more";
-      more.textContent = `Show more (${remaining} remaining)`;
-      more.addEventListener("click", () => {
-        metadataVisible += 100;
-        renderMetadata();
-      });
-      savedEntries.appendChild(more);
-    }
-    if (!metadataEntries.length) {
-      savedEntries.textContent = "No LoRA identities have been saved yet.";
-    }
-  };
+  const savedData = document.createElement("button");
+  savedData.type = "button";
+  savedData.className = "apex-saved-data-open";
+  savedData.title = "Open saved LoRA identities and trigger-word metadata";
+  const savedDataIcon = svgIcon("externalLink");
+  const savedDataLabel = document.createElement("span");
+  savedDataLabel.textContent = "Saved LoRA data";
+  const savedDataCount = document.createElement("strong");
+  savedDataCount.textContent = metadataCache === null
+    ? "..."
+    : String(metadataCache.length);
+  savedData.append(savedDataIcon, savedDataLabel, savedDataCount);
+  savedData.addEventListener("click", () => showSavedLoraData(node, savedData));
+  panel.append(fields, actions, savedData);
 
   loadMetadata().then((entries) => {
-    if (!panel.isConnected) return;
-    metadataEntries = entries;
-    renderMetadata();
-  }).catch((error) => {
-    if (!panel.isConnected) return;
-    savedEntries.textContent = error.message;
-  });
-
-  clearAll.addEventListener("click", async () => {
-    const count = metadataEntries.length;
-    const noun = count === 1 ? "record" : "records";
-    const confirmed = window.confirm(
-      `Clear all saved LoRA data?\n\nThis deletes ${count} saved LoRA identity ${noun} and every trigger word stored with them. Trigger words will also be cleared from Apex nodes in the currently open workflow.\n\nLoRA files, stack rows, sections, presets, and folder settings are not deleted. Identity records will be recreated as LoRAs are identified again. Deleted trigger words cannot be recovered unless another workflow still contains them; opening that workflow can save them again.\n\nContinue?`,
-    );
-    if (!confirmed) return;
-    clearAll.disabled = true;
-    try {
-      const result = await fetchJson("/apex_lora_loader/metadata", { method: "DELETE" });
-      const deleted = Number.isInteger(result.deleted) ? result.deleted : count;
-      const deletedNoun = deleted === 1 ? "record" : "records";
-      const triggerPronoun = deleted === 1 ? "its" : "their";
-      metadataEntries = [];
-      metadataVisible = 100;
-      metadataCache = [];
-      clearOpenTriggerMetadata();
-      renderMetadata();
-      setStatus(
-        node,
-        `Cleared ${deleted} saved LoRA ${deletedNoun} and ${triggerPronoun} trigger words. LoRA files, presets, and stack rows were not deleted; identity records will rebuild as needed.`,
-      );
-    } catch (error) {
-      clearAll.disabled = false;
-      setStatus(node, error.message, true);
-    }
+    if (panel.isConnected) savedDataCount.textContent = String(entries.length);
+  }).catch(() => {
+    if (panel.isConnected) savedDataCount.textContent = "!";
   });
 
   reset.addEventListener("click", () => {
@@ -5449,6 +5490,65 @@ function unmountNodeEditor(node) {
 }
 
 
+function enableMiddleMouseCanvasPan(root) {
+  let activePointerId = null;
+  let previousPointerEvents = "";
+
+  const finish = (event) => {
+    if (activePointerId === null) return;
+    if (event?.pointerId != null && event.pointerId !== activePointerId) return;
+    activePointerId = null;
+    root.style.pointerEvents = previousPointerEvents;
+    window.removeEventListener("pointerup", finish, true);
+    window.removeEventListener("pointercancel", finish, true);
+    window.removeEventListener("blur", finish, true);
+  };
+
+  root.addEventListener("pointerdown", (event) => {
+    if (event.button !== 1 || activePointerId !== null) return;
+    const canvas = app.canvasEl || app.canvas?.canvas;
+    if (!canvas?.dispatchEvent) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+
+    activePointerId = event.pointerId;
+    previousPointerEvents = root.style.pointerEvents;
+    root.style.pointerEvents = "none";
+    window.addEventListener("pointerup", finish, true);
+    window.addEventListener("pointercancel", finish, true);
+    window.addEventListener("blur", finish, true);
+
+    try {
+      canvas.dispatchEvent(new PointerEvent("pointerdown", {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        pointerId: event.pointerId,
+        pointerType: event.pointerType,
+        isPrimary: event.isPrimary,
+        button: event.button,
+        buttons: event.buttons,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        screenX: event.screenX,
+        screenY: event.screenY,
+        ctrlKey: event.ctrlKey,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        metaKey: event.metaKey,
+      }));
+    } catch (error) {
+      finish();
+    }
+  }, true);
+
+  root.addEventListener("auxclick", (event) => {
+    if (event.button === 1) event.preventDefault();
+  }, true);
+}
+
 function buildNodeUI(node) {
   if (node.__apexBuilt) return;
   node.__apexBuilt = true;
@@ -5468,6 +5568,7 @@ function buildNodeUI(node) {
 
   const root = document.createElement("div");
   root.className = "apex-lora-preview";
+  enableMiddleMouseCanvasPan(root);
   root.addEventListener("pointerdown", (event) => event.stopPropagation());
   root.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
   const domWidget = node.addDOMWidget("apex_lora_ui", "apex-lora-preview", root, {

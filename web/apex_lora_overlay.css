@@ -755,6 +755,41 @@
   color: var(--apex-error-soft);
 }
 
+.apex-saved-data-info-tooltip {
+  width: min(370px, calc(100vw - 16px));
+}
+
+.apex-saved-data-info-tooltip .apex-info-tooltip-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  row-gap: 2px;
+  align-items: center;
+}
+
+.apex-saved-data-info-tooltip .apex-info-tooltip-heading {
+  display: contents;
+}
+
+.apex-saved-data-info-tooltip .apex-info-tooltip-heading strong {
+  min-width: 0;
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.apex-saved-data-info-tooltip .apex-info-tooltip-heading span {
+  min-width: 0;
+  overflow: hidden;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apex-saved-data-info-tooltip .apex-info-tooltip-activity {
+  grid-column: 2;
+  grid-row: 1;
+}
+
 .apex-info-tooltip-group,
 .apex-info-tooltip-duplicates {
   display: grid;

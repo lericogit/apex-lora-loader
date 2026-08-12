@@ -894,7 +894,16 @@
 }
 .apex-popover.apex-preset-dropdown { width: min(390px, calc(100vw - 16px)); }
 .apex-popover.apex-preset-save { width: min(380px, calc(100vw - 16px)); }
-.apex-popover.apex-settings-popover { width: min(310px, calc(100vw - 16px)); }
+.apex-popover.apex-settings-popover {
+  width: min(310px, calc(100vw - 16px));
+  overflow: hidden;
+}
+.apex-popover.apex-saved-data-popover {
+  width: min(540px, calc(100vw - 16px));
+  height: min(720px, 82vh);
+  max-height: min(720px, 82vh);
+  overflow: hidden;
+}
 .apex-popover.apex-trigger-popover { width: min(330px, calc(100vw - 16px)); }
 .apex-popover-header {
   display: flex;
@@ -1812,6 +1821,7 @@
 
 .apex-settings-list {
   display: flex;
+  flex: none;
   gap: 8px;
   flex-direction: column;
 }
@@ -1855,21 +1865,75 @@
 }
 .apex-setting-row:last-child { border-bottom: 0; }
 .apex-setting-number { width: 84px; padding: 2px 6px; text-align: center; font-family: var(--apex-code-font) !important; }
-.apex-saved-data {
-  padding-top: 7px;
-  border-top: 1px solid var(--apex-border);
+.apex-saved-data-open {
+  display: grid;
+  width: 100%;
+  min-height: 34px;
+  padding: 5px 8px;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  border-color: rgba(119, 213, 220, .18) !important;
+  background: rgba(68, 166, 173, .055) !important;
+  color: var(--apex-text-soft) !important;
+  text-align: left;
 }
-.apex-saved-data summary { color: var(--apex-text-soft); cursor: pointer; font-weight: 600; }
+.apex-saved-data-open:hover {
+  border-color: rgba(119, 213, 220, .38) !important;
+  background: rgba(68, 166, 173, .11) !important;
+}
+.apex-saved-data-open svg {
+  width: 14px;
+  height: 14px;
+  color: var(--apex-primary);
+}
+.apex-saved-data-open span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.apex-saved-data-open strong,
+.apex-saved-data-overview strong {
+  min-width: 25px;
+  padding: 2px 6px;
+  border: 1px solid rgba(119, 213, 220, .18);
+  border-radius: 999px;
+  background: rgba(7, 14, 18, .34);
+  color: var(--apex-primary);
+  font: 600 9px/12px var(--apex-code-font);
+  text-align: center;
+}
+.apex-saved-data-overview {
+  display: flex;
+  min-height: 28px;
+  padding: 4px 6px;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  color: var(--apex-text-dim);
+  font-size: 10px;
+}
 .apex-saved-data-list {
+  min-height: 0;
   max-height: 190px;
   margin-top: 6px;
+  flex: 1 1 auto;
   overflow: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--apex-border);
   border-radius: 5px;
   background: rgba(10, 14, 21, .32);
   font-size: 11px;
   scrollbar-color: var(--apex-surface-bright) transparent;
   scrollbar-width: thin;
+}
+.apex-saved-data-popover .apex-saved-data-list {
+  min-height: 160px;
+  max-height: none;
+  margin-top: 0;
+  flex: 1 1 auto;
 }
 .apex-saved-data-row {
   display: grid;
@@ -1896,6 +1960,7 @@
 .apex-danger-zone {
   display: grid;
   padding-top: 8px;
+  flex: none;
   gap: 7px;
   border-top: 1px solid rgba(240, 113, 112, .3);
   color: var(--apex-error-soft);
