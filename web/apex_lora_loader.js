@@ -3194,6 +3194,11 @@ function showNodeSettings(node, anchor) {
   const showSafetensors = toggle("Show .safetensors", settings.show_safetensors);
   const showFolderPaths = toggle("Show folder paths", settings.show_folder_paths);
   const showTriggerButton = toggle("Show trigger-word button", settings.show_trigger_button);
+  const showSectionDividers = toggle(
+    "Show preview section dividers",
+    settings.show_section_dividers,
+    "Show a subtle separator between sections in the compact node preview",
+  );
   const previewLimitRow = document.createElement("label");
   previewLimitRow.className = "apex-setting-row";
   const previewLimitLabel = document.createElement("span");
@@ -3300,6 +3305,7 @@ function showNodeSettings(node, anchor) {
     showSafetensors.checked = DEFAULT_SETTINGS.show_safetensors;
     showFolderPaths.checked = DEFAULT_SETTINGS.show_folder_paths;
     showTriggerButton.checked = DEFAULT_SETTINGS.show_trigger_button;
+    showSectionDividers.checked = DEFAULT_SETTINGS.show_section_dividers;
     previewLimit.value = String(DEFAULT_SETTINGS.preview_lora_limit);
     sectionMaxWidth.value = String(DEFAULT_SETTINGS.section_max_width);
     dragStep.value = String(DEFAULT_SETTINGS.strength_drag_step);
@@ -3332,6 +3338,7 @@ function showNodeSettings(node, anchor) {
       show_safetensors: showSafetensors.checked,
       show_folder_paths: showFolderPaths.checked,
       show_trigger_button: showTriggerButton.checked,
+      show_section_dividers: showSectionDividers.checked,
       preview_lora_limit: normalizePreviewLoraLimit(previewLimit.value),
       section_max_width: normalizeSectionMaxWidth(sectionMaxWidth.value),
       strength_drag_step: step,
@@ -5095,10 +5102,19 @@ function renderPreview(node, summary = previewSummary(node.__apexState)) {
     // every strength field lines up without wasting space when no LoRA in view
     // has trigger words.
     const reserveTrigger = summary.rows.some((item) => item.triggerWordCount > 0);
+    let previousSectionId = null;
     for (const item of summary.rows) {
       const row = document.createElement("div");
       row.dataset.apexRowId = item.id;
       row.className = `apex-preview-row${item.effective ? "" : " inactive"}${item.muted ? " muted" : ""}${item.error ? " error" : ""}`;
+      if (
+        node.__apexState.settings.show_section_dividers
+        && previousSectionId !== null
+        && item.sectionId !== previousSectionId
+      ) {
+        row.classList.add("section-start");
+      }
+      previousSectionId = item.sectionId;
       row.setAttribute("aria-label", item.error || `${item.sectionName} / ${item.name}`);
       const main = document.createElement("div");
       main.className = "apex-preview-row-main";

@@ -18,6 +18,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   show_safetensors: true,
   show_folder_paths: true,
   show_trigger_button: false,
+  show_section_dividers: true,
   preview_lora_limit: DEFAULT_PREVIEW_LORA_LIMIT,
   section_max_width: DEFAULT_SECTION_MAX_WIDTH,
   strength_drag_step: 0.01,
@@ -194,6 +195,7 @@ export function normalizeSettings(value) {
     show_safetensors: value?.show_safetensors !== false,
     show_folder_paths: value?.show_folder_paths !== false,
     show_trigger_button: value?.show_trigger_button === true,
+    show_section_dividers: value?.show_section_dividers !== false,
     preview_lora_limit: normalizePreviewLoraLimit(
       value?.preview_lora_limit,
       value?.show_all_enabled_loras,
